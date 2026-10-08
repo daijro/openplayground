@@ -19,6 +19,6 @@ if (tool.tag === 'v0.4.0') {
       await click(x, dark ? y : y + 87) // Dark (1st item) / Light (4th item)
     }
     // The page removes #vectorcraft_loading once the app has started.
-    const t = setInterval(() => { if (!document.getElementById('vectorcraft_loading')) { clearInterval(t); step(3, 300).then(go) } }, 100)
+    const t = setInterval(() => { if (!document.getElementById('vectorcraft_loading')) { clearInterval(t); step(3, 300).then(() => withInputHeld(go)) } }, 100)
   })
 }

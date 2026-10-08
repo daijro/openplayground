@@ -21,8 +21,10 @@ if (tool.tag === 'v0.1.0' && innerWidth >= 900 && matchMedia('(prefers-color-sch
       await sleep(200)
       if (document.getElementById('wordcraft_canvas')?.style.cursor === 'text') break
     }
-    await tap(575, 53) // View tab
-    await tap(842, 105) // Dark Mode > Switch Modes
-    await tap(75, 53) // Home tab
+    await withInputHeld(async () => {
+      await tap(575, 53) // View tab
+      await tap(842, 105) // Dark Mode > Switch Modes
+      await tap(75, 53) // Home tab
+    })
   })()
 }

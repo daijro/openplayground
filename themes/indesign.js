@@ -22,11 +22,13 @@ if (tool.tag === 'v0.2.1') {
       if (i > 600) return void (c.style.cssText = '') // failed to start: leave the error visible
       await sleep(50)
     }
-    await sleep(400)
-    await click(374, 17) // Window
-    ev('mousemove', 380, 418); await sleep(150); ev('mousemove', 420, 418); await sleep(300) // Interface Color Theme >
-    await click(640, dark ? 418 : 493) // Dark | Light
-    c.dispatchEvent(new MouseEvent('mouseleave'))
+    await withInputHeld(async () => {
+      await sleep(400)
+      await click(374, 17) // Window
+      ev('mousemove', 380, 418); await sleep(150); ev('mousemove', 420, 418); await sleep(300) // Interface Color Theme >
+      await click(640, dark ? 418 : 493) // Dark | Light
+      c.dispatchEvent(new MouseEvent('mouseleave'))
+    })
     c.style.cssText = ''
   })
 }

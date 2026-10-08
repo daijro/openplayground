@@ -8,12 +8,14 @@ if (tool.tag === 'v0.1.0' && matchMedia('(prefers-color-scheme: dark)').matches)
     const c = document.getElementById('gridcraft_canvas')
     while (document.getElementById('gridcraft_loading')) await frame() // removed once the app has started
     await frames(30)
-    for (const [x, y] of [[514, 53], [537, 89], [47, 53]]) { // View tab, Dark Mode, Home tab
-      const r = c.getBoundingClientRect()
-      const o = { clientX: r.left + x, clientY: r.top + y, bubbles: true, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true }
-      c.dispatchEvent(new MouseEvent('mousemove', o)); await frames(3)
-      c.dispatchEvent(new PointerEvent('pointerdown', { ...o, buttons: 1 })); await frames(3)
-      c.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 })); await frames(6)
-    }
+    await withInputHeld(async () => {
+      for (const [x, y] of [[514, 53], [537, 89], [47, 53]]) { // View tab, Dark Mode, Home tab
+        const r = c.getBoundingClientRect()
+        const o = { clientX: r.left + x, clientY: r.top + y, bubbles: true, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true }
+        c.dispatchEvent(new MouseEvent('mousemove', o)); await frames(3)
+        c.dispatchEvent(new PointerEvent('pointerdown', { ...o, buttons: 1 })); await frames(3)
+        c.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 })); await frames(6)
+      }
+    })
   })
 }

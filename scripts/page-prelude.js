@@ -3,6 +3,25 @@
 
 const mb = (bytes) => (bytes / 1e6).toFixed(1)
 
+// For theme scripts that click through an app's own menus: run `steps` with the user's real mouse, touch
+// and keyboard input held back from the app, so a moving (or resting) pointer can't pull the app's hover
+// off the menu mid-sequence. Released when the steps finish, or after 10s at most.
+const withInputHeld = async (steps) => {
+  const types = ['pointerdown', 'pointerup', 'pointermove', 'pointerover', 'pointerout', 'pointerenter', 'pointerleave', 'pointercancel',
+    'mousedown', 'mouseup', 'mousemove', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'click', 'contextmenu', 'wheel',
+    'touchstart', 'touchmove', 'touchend', 'touchcancel', 'keydown', 'keyup', 'keypress']
+  const hold = (e) => e.isTrusted && e.stopImmediatePropagation()
+  const release = () => types.forEach((t) => removeEventListener(t, hold, true))
+  types.forEach((t) => addEventListener(t, hold, true))
+  const failsafe = setTimeout(release, 10000)
+  try {
+    return await steps()
+  } finally {
+    clearTimeout(failsafe)
+    release()
+  }
+}
+
 // Download/unzip progress, shown under the app's own loading text until the .wasm is unpacked.
 const progressUI = (total, download) => {
   const box = document.createElement('div')
