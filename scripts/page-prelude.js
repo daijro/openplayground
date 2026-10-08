@@ -44,6 +44,21 @@ const progressUI = (total, download) => {
   }
 }
 
+// The apps' Ctrl/Cmd shortcuts also trigger the browser's own action (eframe only blocks Ctrl+S/O/P/,):
+// Ctrl+Z undoes in eframe's hidden text field, Ctrl+D bookmarks, Ctrl+J opens downloads, Ctrl+-/= zoom the
+// page. Cancel the browser's action; the app still gets the key. Copy, paste, cut, select all, reload,
+// tab switching (Ctrl+1-9) and the developer tools stay the browser's.
+addEventListener(
+  'keydown',
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+    const k = e.key.toLowerCase()
+    if (k.length !== 1 || 'cvxar123456789'.includes(k) || (e.shiftKey && 'ijc'.includes(k))) return
+    e.preventDefault()
+  },
+  true,
+)
+
 // The .wasm files are stored gzipped (.wasm.gz) to fit the host's 25 MiB file limit: fetch the .gz and
 // unzip it on the fly, so the app's loader still sees a normal application/wasm response.
 const fetchOriginal = window.fetch
