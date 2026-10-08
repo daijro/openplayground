@@ -13,3 +13,5 @@ Releases are fetched every 15min.
 - WASM files compressed with gzip for faster load time
 - Dark theme follows your system preference
 - Workaround to enable clipboard access
+- Compile shaders in the background for faster start times
+- Render viewers on the page's own GPU instead of in background workers
