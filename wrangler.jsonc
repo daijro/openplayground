@@ -12,5 +12,7 @@
   },
   "triggers": {
     "crons": ["*/15 * * * *"]
-  }
+  },
+  // Keep variables set in the dashboard (GITHUB_TOKEN) across deploys, even if saved as plain text.
+  "keep_vars": true
 }
