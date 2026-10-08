@@ -95,6 +95,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          # The retry run after a failed push build is started by this workflow's own bot; the prompt is fixed.
+          allowed_bots: github-actions
           settings: '{"env": {"BASH_DEFAULT_TIMEOUT_MS": "1800000", "BASH_MAX_TIMEOUT_MS": "1800000"}}'
           claude_args: >-
             --max-turns 120
