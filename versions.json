@@ -1,13 +1,14 @@
 {
-  "photoshop": "v0.3.0+f036669a",
-  "illustrator": "v0.4.0+ee43225f",
-  "indesign": "v0.2.1+6dad0aae",
-  "lightroom": "v0.2.1+f036669a",
-  "premiere": "v0.2.1+f036669a",
-  "after-effects": "v0.4.0+632b2b8f",
-  "acrobat": "v0.2.1+f036669a",
-  "word": "v0.1.0+0714ecd1",
-  "excel": "v0.1.0+8ed3c081",
-  "powerpoint": "v0.1.0+52789d24",
-  "autocad": "v0.1.0+f036669a"
+  "photoshop": "v0.3.0+b8d9d461",
+  "illustrator": "v0.4.0+e9f97aa8",
+  "indesign": "v0.2.1+ef8eb72c",
+  "lightroom": "v0.2.1+b8d9d461",
+  "premiere": "v0.2.1+b8d9d461",
+  "after-effects": "v0.4.0+cabf1479",
+  "acrobat": "v0.2.1+b8d9d461",
+  "word": "v0.1.0+a0693333",
+  "excel": "v0.1.0+e49293c4",
+  "powerpoint": "v0.1.0+a6908565",
+  "autocad": "v0.1.0+b8d9d461",
+  "pro-tools": "main-9334ba0+b8d9d461"
 }
