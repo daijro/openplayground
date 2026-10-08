@@ -1,12 +1,12 @@
 {
-  "photoshop": "v0.3.0",
+  "photoshop": "v0.3.0+27853750",
   "illustrator": "v0.4.0",
-  "indesign": "v0.2.1",
+  "indesign": "v0.2.1+92e5b342",
   "lightroom": "v0.2.1",
-  "premiere": "v0.2.1",
+  "premiere": "v0.2.1+27853750",
   "after-effects": "v0.4.0",
   "acrobat": "v0.2.1",
-  "word": "v0.1.0",
-  "excel": "v0.1.0",
+  "word": "v0.1.0+bb1c1183",
+  "excel": "v0.1.0+4f276e74",
   "powerpoint": "v0.1.0"
 }
