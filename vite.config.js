@@ -17,15 +17,16 @@ const card = (t) => {
   const release = installed(t, 'release')
   const head = installed(t, 'head') ?? release
   const shown = release ?? head
+  const ahead = head.ahead ? `${head.ahead.commits} commit${head.ahead.commits === 1 ? '' : 's'} ahead of ${head.ahead.of}` : ''
   return `
-      <a class="tool" href="${shown.path}" data-release-href="${shown.path}" data-head-href="${head.path}" style="--accent:${t.accent};--base:${t.base}">
+      <div class="tool" data-release-href="${shown.path}" data-head-href="${head.path}" style="--accent:${t.accent};--base:${t.base}">
         <img src="/${t.icon}" alt="" width="64" height="64">
         <span class="title">
-          <span class="name">${t.name}</span>
-          <span class="source" data-release="${repo} ${shown.label}" data-head="${repo} ${head.label}" data-date="${head.date ?? ''}" data-ahead="${head.ahead ? `${head.ahead.commits} commit${head.ahead.commits === 1 ? '' : 's'} ahead of ${head.ahead.of}` : ''}">${repo} ${shown.label}</span>
+          <a class="name open" href="${shown.path}">${t.name}</a>
+          <span class="source"><a class="repo" href="https://github.com/${t.repo}">${repo}</a> <span class="version" data-release="${shown.label}" data-head="${head.label}" data-date="${head.date ?? ''}" data-ahead="${ahead}">${shown.label}</span></span>
         </span>
         <span class="blurb">${t.blurb}</span>
-      </a>`
+      </div>`
 }
 
 const group = (g) => `
