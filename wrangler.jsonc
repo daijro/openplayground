@@ -1,10 +1,16 @@
-// A static-assets-only Worker: Cloudflare serves the Vite build as is (folders like /photoshop/ get their
-// index.html, and /photoshop redirects to /photoshop/).
+// The site's Worker: Cloudflare serves the Vite build as static assets (folders like /photoshop/ get their
+// index.html, and /photoshop redirects to /photoshop/), and worker.js starts the update workflows every
+// 15 minutes.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "openplayground",
   "compatibility_date": "2026-10-01",
+  "main": "worker.js",
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
   }
 }
