@@ -1,6 +1,6 @@
 # OpenPlayground
 
-Use ArtCraft's clean-room implementations of Adobe & Microsoft Office products in your browser.
+Use [ArtCraft](https://github.com/storytold)'s clean-room implementations of Adobe & Microsoft Office products in your browser.
 
 Releases are fetched every 15min.
 
