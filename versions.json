@@ -8,5 +8,6 @@
   "acrobat": "v0.2.1+f036669a",
   "word": "v0.1.0+0714ecd1",
   "excel": "v0.1.0+8ed3c081",
-  "powerpoint": "v0.1.0+52789d24"
+  "powerpoint": "v0.1.0+52789d24",
+  "autocad": "v0.1.0"
 }

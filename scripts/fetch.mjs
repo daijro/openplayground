@@ -10,6 +10,8 @@ import { JUNK, builtAssets, tools, upstreamRelease } from './releases.mjs'
 
 const MAX_FILE = 25 * 1024 * 1024 // the host's per-file limit
 const prelude = readFileSync('scripts/page-prelude.js', 'utf8')
+const lazyPipelines = readFileSync('scripts/lazy-pipelines.js', 'utf8')
+const WORKER_START = '// playground: lazy-pipelines.js {', WORKER_END = '// } playground'
 
 // Brand and patch an installed build in `dir`. Idempotent, so it also runs on builds already installed and
 // picks up tools.yaml, theme and prelude edits without a re-download.
@@ -28,6 +30,7 @@ const patch = (t, dir) => {
   const script = [
     `const tool = ${JSON.stringify({ name: t.name, accent: t.accent, tag, wasm })}\n`,
     prelude,
+    lazyPipelines,
     t.theme && !(built && t.patches) && readFileSync(t.theme, 'utf8'),
   ].filter(Boolean).join('\n')
   const page = join(dir, 'index.html')
@@ -39,6 +42,13 @@ const patch = (t, dir) => {
     .replace(/\s*<script id="playground-prelude">[\s\S]*?<\/script>/, '')
     .replace(/<meta charset[^>]*>/i, (m) => `${m}\n  <script id="playground-prelude">{\n${script}}</script>`)
   writeFileSync(page, html)
+
+  // Workers that run the app (EffectCraft renders frames in some) get lazy-pipelines.js too.
+  for (const f of readdirSync(dir, { recursive: true }).filter((f) => basename(f) === 'worker.js')) {
+    const code = readFileSync(join(dir, f), 'utf8')
+    const original = code.startsWith(WORKER_START) ? code.slice(code.indexOf(WORKER_END) + WORKER_END.length + 1) : code
+    writeFileSync(join(dir, f), `${WORKER_START}\n${lazyPipelines}${WORKER_END}\n${original}`)
+  }
 
   // EffectCraft's service worker precaches the .wasm by name and serves its cached index.html first: point
   // it at the .wasm.gz, and tie its VERSION to the patched page so returning visitors pick up changes.

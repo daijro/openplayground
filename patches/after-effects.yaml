@@ -1,0 +1,7 @@
+# Render viewer frames on the page's own GPU when it draws with WebGPU, instead of in frame workers: each
+# worker renders on its own device and sends every frame back through a GPU readback, which made scrubbing
+# lag. `?frameworkers=N` still picks a number of workers, and without WebGPU (frames rendered on the CPU)
+# the upstream default stays, so the page keeps responding while frames render.
+- file: apps/*-web/src/**/*.rs
+  find: '(query_value\("frameworkers"\)[^;]*?\.unwrap_or\()\s*(\d+)\s*(?:usize)?\s*\)'
+  replace: '$1if cc.wgpu_render_state.as_ref().is_some_and(|rs| rs.adapter.get_info().backend == eframe::wgpu::Backend::BrowserWebGpu) { 0usize } else { $2usize })'

@@ -67,6 +67,7 @@ groups:
         repo: storytold/effectcraft
         icon: icons/after-effects.svg
         theme: themes/after-effects.js
+        patches: patches/after-effects.yaml
         accent: "#9999FF"
         base: "#00005B"
 
@@ -110,3 +111,13 @@ groups:
         patches: patches/powerpoint.yaml
         accent: "#FF8F6B"
         base: "#3D1308"
+
+  - name: Other
+    tools:
+      - slug: autocad
+        name: AutoCAD
+        blurb: Computer-aided design and drafting.
+        repo: storytold/cadcraft
+        icon: icons/autocad.svg
+        accent: "#E85984"
+        base: "#3A0716"
