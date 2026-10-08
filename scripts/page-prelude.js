@@ -59,6 +59,26 @@ addEventListener(
   true,
 )
 
+// eframe only hands pasted text to the app, so pasting a screenshot or a copied image did nothing. Give
+// an image-only paste to the app as a file dropped on the middle of its canvas, which every app opens or
+// places. Text pastes stay eframe's.
+addEventListener(
+  'paste',
+  (e) => {
+    const images = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'))
+    const canvas = document.querySelector('canvas')
+    if (!images.length || !canvas || e.clipboardData.getData('text')) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    const dataTransfer = new DataTransfer()
+    for (const f of images) dataTransfer.items.add(new File([f], f.name || `pasted.${f.type.split('/')[1]}`, { type: f.type }))
+    const r = canvas.getBoundingClientRect()
+    const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true, dataTransfer }
+    for (const type of ['dragenter', 'dragover', 'drop']) canvas.dispatchEvent(new DragEvent(type, at))
+  },
+  true,
+)
+
 // The .wasm files are stored gzipped (.wasm.gz) to fit the host's 25 MiB file limit: fetch the .gz and
 // unzip it on the fly, so the app's loader still sees a normal application/wasm response.
 const fetchOriginal = window.fetch
