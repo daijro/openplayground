@@ -10,10 +10,14 @@ export const JUNK = /^(build|deps|incremental|examples|\.fingerprint|\.cargo-.*|
 // Where build.mjs publishes the patched, optimized builds, as assets of one release.
 export const BUILDS = { repo: 'daijro/openplayground', tag: 'builds' }
 
+// Retried on network errors and 5xx responses, which GitHub's API gives now and then.
 export const github = async (path) => {
-  const res = await fetch(`https://api.github.com/${path}`, { headers })
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${path}: ${await res.text()}`)
-  return res.json()
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(`https://api.github.com/${path}`, { headers }).catch((e) => (attempt < 3 ? null : Promise.reject(e)))
+    if (res?.ok) return res.json()
+    if (res && (res.status < 500 || attempt >= 3)) throw new Error(`GitHub API ${res.status} for ${path}: ${await res.text()}`)
+    await new Promise((r) => setTimeout(r, attempt * 2000))
+  }
 }
 
 // A tool's newest upstream release (or its pinned tag) that has a web build, and that build's asset. A tool

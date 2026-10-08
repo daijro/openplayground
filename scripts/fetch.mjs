@@ -67,17 +67,26 @@ for (const t of tools) {
   try {
     const dir = join('public', t.slug)
     const { release, asset: upstream } = await upstreamRelease(t)
-    // Our build of this release (<slug>-<tag>-<hash>.zip), the newest if there are several.
-    const ours = built
-      .filter((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`) && /-[0-9a-f]{8}\.zip$/.test(a.name))
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+    // Our builds of this tool (<slug>-<tag>-<hash>.zip), newest first, and the newest of this release.
+    const builds = built
+      .filter((a) => a.name.startsWith(`${t.slug}-`) && /-[0-9a-f]{8}\.zip$/.test(a.name))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    const ours = builds.find((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`))
     // A build made here with build.mjs (out/<slug>-<tag>-<hash>.zip) wins, to try builds before CI publishes them.
     const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort().at(-1)
     const local = localZip && { name: localZip, path: join('out', localZip), updated_at: statSync(join('out', localZip)).mtime.toISOString(), size: statSync(join('out', localZip)).size }
-    const asset = local || ours || upstream
-    if (!asset) throw new Error(`${release.tag_name} isn't built yet (build.yml builds it)`)
+    // A tool built from a branch has no upstream zip: until its newest version is built, keep its newest
+    // earlier build; one that was never built is left out (the dashboard doesn't list it).
+    const previous = !upstream && builds[0]
+    const asset = local || ours || upstream || previous
+    if (!asset) {
+      console.warn(`${t.slug}: ${release.tag_name} isn't built yet and there's no earlier build: skipped`)
+      continue
+    }
+    const tag = asset === previous ? asset.name.slice(t.slug.length + 1, asset.name.lastIndexOf('-')) : release.tag_name
+    if (asset === previous) console.log(`${t.slug}: ${release.tag_name} isn't built yet, keeping ${tag}`)
 
-    const stamp = JSON.stringify({ tag: release.tag_name, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours) }) + '\n'
+    const stamp = JSON.stringify({ tag, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
     if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
       console.log(`${t.slug}: ${asset.name} already installed`)
       patch(t, dir)
