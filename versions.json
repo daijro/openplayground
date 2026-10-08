@@ -1,12 +1,12 @@
 {
-  "photoshop": "v0.3.0+27853750",
-  "illustrator": "v0.4.0+fd6e942a",
-  "indesign": "v0.2.1+92e5b342",
-  "lightroom": "v0.2.1",
-  "premiere": "v0.2.1+27853750",
-  "after-effects": "v0.4.0+27853750",
-  "acrobat": "v0.2.1+27853750",
-  "word": "v0.1.0+bb1c1183",
-  "excel": "v0.1.0+4f276e74",
-  "powerpoint": "v0.1.0+e5e18405"
+  "photoshop": "v0.3.0+f036669a",
+  "illustrator": "v0.4.0+ee43225f",
+  "indesign": "v0.2.1+6dad0aae",
+  "lightroom": "v0.2.1+f036669a",
+  "premiere": "v0.2.1+f036669a",
+  "after-effects": "v0.4.0+f036669a",
+  "acrobat": "v0.2.1+f036669a",
+  "word": "v0.1.0+0714ecd1",
+  "excel": "v0.1.0+acddc0b6",
+  "powerpoint": "v0.1.0+52789d24"
 }
