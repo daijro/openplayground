@@ -1,0 +1,94 @@
+# Dashboard groups, each with its tools. Each tool is served at /<slug>/ and listed in this order.
+#
+#   repo:   GitHub repo to download the web build from
+#   tag:    release tag to pin (optional; default: the newest non-prerelease that has a matching asset)
+#   asset:  regex matching the release asset name (optional; default: "-web-.*\.zip$")
+#   icon:   dashboard icon, also copied in as the tool page's favicon
+#   accent, base: a light and a dark brand color, used for the dashboard hover
+#
+# Run `make fetch` after editing.
+
+groups:
+  - name: Adobe Creative Cloud
+    tools:
+      - slug: photoshop
+        name: Photoshop
+        blurb: Layers, masks, adjustments, brushes and real PSD files.
+        repo: storytold/photocraft
+        icon: icons/photoshop.svg
+        accent: "#31A8FF"
+        base: "#001E36"
+
+      - slug: illustrator
+        name: Illustrator
+        blurb: Vector paths, type and artboards.
+        repo: storytold/vectorcraft
+        icon: icons/illustrator.svg
+        accent: "#FF9A00"
+        base: "#330000"
+
+      - slug: indesign
+        name: InDesign
+        blurb: Page layout and publishing.
+        repo: storytold/designcraft
+        icon: icons/indesign.svg
+        accent: "#FF3366"
+        base: "#49021F"
+
+      - slug: lightroom
+        name: Lightroom
+        blurb: Photo library and raw development.
+        repo: storytold/lightcraft
+        icon: icons/lightroom.svg
+        accent: "#31A8FF"
+        base: "#001E36"
+
+      - slug: premiere
+        name: Premiere Pro
+        blurb: Video editing, color and sound.
+        repo: storytold/filmcraft
+        icon: icons/premiere.svg
+        accent: "#9999FF"
+        base: "#00005B"
+
+      - slug: after-effects
+        name: After Effects
+        blurb: Compositions, keyframes, effects and expressions.
+        repo: storytold/effectcraft
+        icon: icons/after-effects.svg
+        accent: "#9999FF"
+        base: "#00005B"
+
+      - slug: acrobat
+        name: Acrobat Pro
+        blurb: Read, organize, combine, split and secure PDFs.
+        repo: storytold/pdfcraft
+        icon: icons/acrobat.svg
+        accent: "#FA0F00"
+        base: "#3A0400"
+
+  - name: Microsoft Office
+    tools:
+      - slug: word
+        name: Word
+        blurb: Writing and document design.
+        repo: storytold/wordcraft
+        icon: icons/word.svg
+        accent: "#41A5EE"
+        base: "#0B2557"
+
+      - slug: excel
+        name: Excel
+        blurb: Spreadsheets and data.
+        repo: storytold/gridcraft
+        icon: icons/excel.svg
+        accent: "#33C481"
+        base: "#062E19"
+
+      - slug: powerpoint
+        name: PowerPoint
+        blurb: Presentations and slide shows.
+        repo: storytold/deckcraft
+        icon: icons/powerpoint.svg
+        accent: "#FF8F6B"
+        base: "#3D1308"

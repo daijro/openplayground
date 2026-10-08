@@ -1,0 +1,40 @@
+name: Fetch releases
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: fetch
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+
+      # public/ holds the downloaded builds; restoring the last one lets `make fetch` skip unchanged releases.
+      - id: restore
+        uses: actions/cache/restore@v6
+        with:
+          path: public
+          key: tools-${{ github.run_id }}
+          restore-keys: tools-
+      - run: make fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - if: steps.restore.outputs.cache-matched-key != format('tools-{0}', hashFiles('public/*/.release'))
+        uses: actions/cache/save@v6
+        with:
+          path: public
+          key: tools-${{ hashFiles('public/*/.release') }}
+
+      - run: make build
