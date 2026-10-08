@@ -20,27 +20,40 @@ export const github = async (path) => {
   }
 }
 
-// A tool's newest upstream release (or its pinned tag) that has a web build, and that build's asset. A tool
-// with `branch:` (a repo without web releases) gets, as a release named <branch>-<commit>, the newest
-// commit on that branch that changed one of its `paths:` (any commit without them), with `ref` set to
-// the commit and no asset: only build.mjs can make its build.
-export const upstreamRelease = async (t) => {
-  if (t.branch) {
+// Every tool comes in two channels: `release`, its newest upstream release, and `head`, the newest commit on
+// its branch. Head builds are named <slug>-head-<commit>-<hash>.zip and installed under public/head/.
+export const CHANNELS = ['release', 'head']
+export const installDir = (t, channel) => (channel === 'head' ? `public/head/${t.slug}` : `public/${t.slug}`)
+
+// The version of a tool on a channel, as { release, asset }, or null when the channel has none (a repo
+// without web releases has no release channel).
+//   release: the newest upstream release (or its pinned `tag:`) with a web build, and that build's asset;
+//   head: the newest commit on its `branch:` (default main), or the newest that changed one of its `paths:`,
+//         with `ref` (the commit), `label` (<branch>@<commit>) and `date`, and no asset: only build.mjs
+//         can make its build.
+export const resolveVersion = async (t, channel) => {
+  if (channel === 'head') {
+    const branch = t.branch ?? 'main'
     const newest = await Promise.all(
-      (t.paths ?? ['']).map((p) => github(`repos/${t.repo}/commits?sha=${t.branch}&per_page=1${p ? `&path=${encodeURIComponent(p)}` : ''}`)),
+      (t.paths ?? ['']).map((p) => github(`repos/${t.repo}/commits?sha=${branch}&per_page=1${p ? `&path=${encodeURIComponent(p)}` : ''}`)),
     ).then((lists) => lists.flat().sort((a, b) => b.commit.committer.date.localeCompare(a.commit.committer.date))[0])
-    if (!newest) throw new Error(`no commits on ${t.repo} ${t.branch} touch ${t.paths}`)
-    const { sha, commit } = newest
-    return { release: { tag_name: `${t.branch}-${sha.slice(0, 7)}`, ref: sha, published_at: commit.committer.date }, asset: null }
+    if (!newest) return null
+    const commit = newest.sha.slice(0, 7)
+    return { release: { tag_name: `head-${commit}`, ref: newest.sha, label: `${branch}@${commit}`, date: newest.commit.committer.date }, asset: null }
   }
   const pattern = new RegExp(t.asset ?? '-web-.*\\.zip$')
   const release = (await github(`repos/${t.repo}/releases?per_page=100`))
     .filter((r) => (t.tag ? r.tag_name === t.tag : !r.draft && !r.prerelease))
     .sort((a, b) => b.published_at.localeCompare(a.published_at))
     .find((r) => r.assets.some((a) => pattern.test(a.name)))
-  if (!release) throw new Error(`no ${t.tag ? `release ${t.tag}` : 'release'} of ${t.repo} has an asset matching ${pattern}`)
-  return { release, asset: release.assets.find((a) => pattern.test(a.name)) }
+  return release ? { release, asset: release.assets.find((a) => pattern.test(a.name)) } : null
 }
+
+// Our builds (ext .zip) or failure markers (.failed) of a tool on a channel, newest first.
+export const channelAssets = (assets, t, channel, ext = '.zip') =>
+  assets
+    .filter((a) => a.name.startsWith(`${t.slug}-`) && a.name.endsWith(ext) && a.name.startsWith(`${t.slug}-head-`) === (channel === 'head'))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
 
 // Assets of the builds release (none yet if it doesn't exist).
 export const builtAssets = async () => {

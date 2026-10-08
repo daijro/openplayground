@@ -3,10 +3,12 @@
 // these builds from the `builds` release (BUILDS) and falls back to the upstream release while a build
 // is missing or failed.
 //
-//   node scripts/build.mjs plan          # GitHub Actions output: slugs=[...] still to build
-//   node scripts/build.mjs build <slug>  # build one (needs cargo, trunk and wasm-opt, see build.yml)
-//   node scripts/build.mjs check <slug>  # quick check: the patches apply and the app compiles
-//   node scripts/build.mjs id <slug>     # the build id (zip name) of the newest release
+// Every command but plan takes a channel (release or head, see releases.mjs):
+//   node scripts/build.mjs plan                    # GitHub Actions output: include=[{slug, channel}] to build
+//   node scripts/build.mjs build <slug> <channel>  # build one (needs cargo, trunk and wasm-opt, see build.yml)
+//   node scripts/build.mjs check <slug> <channel>  # quick check: the patches apply and the app compiles
+//   node scripts/build.mjs facts <slug> <channel>  # GitHub Actions output: its build id and failure history
+//   node scripts/build.mjs prune <slug> <channel>  # the published builds to delete (all but the 3 newest)
 //
 // Patch files hold a list of rules; each edits the first file (matching the `file` glob) where the
 // `find` regex matches, and must match, or the build fails:
@@ -19,7 +21,7 @@ import { cpSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, rea
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { JUNK, builtAssets, tools, upstreamRelease } from './releases.mjs'
+import { CHANNELS, JUNK, builtAssets, channelAssets, resolveVersion, tools } from './releases.mjs'
 
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
 // Rust's default wasm32 features. wasm-opt reads them from the module's target_features section, which
@@ -72,15 +74,15 @@ const fail = (message) => {
   throw new Error(message)
 }
 
-// A fresh checkout of the tool's newest release in <work>/src, with its patches applied.
-const prepare = async (slug) => {
+// A fresh checkout of the tool's version on a channel in <work>/src, with its patches applied.
+const prepare = async (slug, channel) => {
   const t = toolFor(slug)
-  const { release } = await upstreamRelease(t)
-  const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, slug) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
+  const { release } = (await resolveVersion(t, channel)) ?? fail(`${slug} has no ${channel} version`)
+  const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, `${slug}-${channel}`) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
   const src = join(work, 'src')
   rmSync(src, { recursive: true, force: true })
   if (release.ref) {
-    // A commit (tools with `branch:`): fetch exactly that one.
+    // A commit (the head channel): fetch exactly that one.
     run('git', ['init', '--quiet', src])
     run('git', ['-C', src, 'fetch', '--quiet', '--depth', '1', `https://github.com/${t.repo}.git`, release.ref])
     run('git', ['-C', src, 'checkout', '--quiet', 'FETCH_HEAD'])
@@ -92,14 +94,15 @@ const prepare = async (slug) => {
   return { t, id: buildId(t, release.tag_name), work, src, web }
 }
 
-const check = async (slug) => {
-  const { work, web } = await prepare(slug)
+const check = async (slug, channel) => {
+  if (!(await resolveVersion(toolFor(slug), channel))) return console.log(`${slug} has no ${channel} version: nothing to check`)
+  const { work, web } = await prepare(slug, channel)
   run('cargo', ['check', '--target', 'wasm32-unknown-unknown'], { cwd: web, env: { ...process.env, CARGO_TARGET_DIR: join(work, 'target') } })
-  console.log(`${slug}: the patches apply and the app compiles`)
+  console.log(`${slug} (${channel}): the patches apply and the app compiles`)
 }
 
-const build = async (slug) => {
-  const { id, work, src, web } = await prepare(slug)
+const build = async (slug, channel) => {
+  const { id, work, src, web } = await prepare(slug, channel)
   const dist = join(work, 'dist')
   rmSync(dist, { recursive: true, force: true })
   if (existsSync(join(web, 'Trunk.toml'))) {
@@ -132,25 +135,39 @@ const build = async (slug) => {
   console.log(`built out/${id}.zip`)
 }
 
-const [command, slug] = process.argv.slice(2)
+const DAY = 24 * 3600e3
+const age = (asset) => Date.now() - Date.parse(asset.created_at)
+const [command, slug, channel] = process.argv.slice(2)
 if (command === 'plan') {
-  // To build: tools whose build is missing, unless it failed (<id>.failed) in the last day. Failures are
-  // retried daily, and at once when the release or the patches change (a new id).
+  // To build: each tool's channels whose build is missing, unless it failed (<id>.failed) in the last day.
+  // Failures are retried daily, and at once when the version or the patches change (a new id).
   const assets = await builtAssets()
-  const has = (name, maxAge = Infinity) => assets.some((a) => a.name === name && Date.now() - Date.parse(a.created_at) < maxAge)
-  const todo = []
+  const has = (name, maxAge = Infinity) => assets.some((a) => a.name === name && age(a) < maxAge)
+  const include = []
   for (const t of tools) {
-    const id = buildId(t, (await upstreamRelease(t)).release.tag_name)
-    if (!has(`${id}.zip`) && !has(`${id}.failed`, 24 * 3600e3)) todo.push(t.slug)
+    for (const channel of CHANNELS) {
+      const version = await resolveVersion(t, channel)
+      const id = version && buildId(t, version.release.tag_name)
+      if (id && !has(`${id}.zip`) && !has(`${id}.failed`, DAY)) include.push({ slug: t.slug, channel })
+    }
   }
-  console.log(`slugs=${JSON.stringify(todo)}`)
-} else if (command === 'id' && slug) {
-  console.log(buildId(toolFor(slug), (await upstreamRelease(toolFor(slug))).release.tag_name))
-} else if (command === 'check' && slug) {
-  await check(slug)
-} else if (command === 'build' && slug) {
-  await build(slug)
+  console.log(`include=${JSON.stringify(include)}`)
+} else if (command === 'facts' && slug && CHANNELS.includes(channel)) {
+  // failed_today: a failure in the last day (Claude repairs once a day); failed_before: one over ~a day ago,
+  // so this app has been failing for over a day.
+  const t = toolFor(slug)
+  const failures = channelAssets(await builtAssets(), t, channel, '.failed')
+  const version = await resolveVersion(t, channel)
+  console.log(`id=${version ? buildId(t, version.release.tag_name) : ''}`)
+  console.log(`failed_today=${failures.some((a) => age(a) < DAY)}`)
+  console.log(`failed_before=${failures.some((a) => age(a) > DAY - 3600e3)}`)
+} else if (command === 'prune' && slug && CHANNELS.includes(channel)) {
+  for (const a of channelAssets(await builtAssets(), toolFor(slug), channel).slice(3)) console.log(a.name)
+} else if (command === 'check' && slug && CHANNELS.includes(channel)) {
+  await check(slug, channel)
+} else if (command === 'build' && slug && CHANNELS.includes(channel)) {
+  await build(slug, channel)
 } else {
-  console.error('usage: node scripts/build.mjs plan | build <slug> | check <slug> | id <slug>')
+  console.error('usage: node scripts/build.mjs plan | build|check|facts|prune <slug> release|head')
   process.exit(2)
 }

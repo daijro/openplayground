@@ -34,11 +34,11 @@ jobs:
       - run: make fetch
         env:
           GITHUB_TOKEN: ${{ github.token }}
-      - if: steps.restore.outputs.cache-matched-key != format('tools-{0}', hashFiles('public/*/.release'))
+      - if: steps.restore.outputs.cache-matched-key != format('tools-{0}', hashFiles('public/**/.release'))
         uses: actions/cache/save@v6
         with:
           path: public
-          key: tools-${{ hashFiles('public/*/.release') }}
+          key: tools-${{ hashFiles('public/**/.release') }}
 
       - run: make build
 

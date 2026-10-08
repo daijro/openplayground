@@ -16,6 +16,7 @@
       --line: #2c2e36;
       --text: #ececef;
       --muted: #91939c;
+      --warn: #f5a524;
       --display: "Geist", system-ui, sans-serif;
       --mono: "Geist Mono", ui-monospace, monospace;
     }
@@ -61,6 +62,25 @@
     .source { font: 12px var(--mono); color: var(--muted); }
     .tool:is(:hover, :focus-visible) .source { color: var(--accent); }
 
+    .topbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 16px; }
+    .switch { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; user-select: none; }
+    .switch:has(:checked) { color: var(--text); }
+    .switch input { appearance: none; position: relative; flex: none; width: 34px; height: 20px; margin: 0; border-radius: 999px; background: var(--line); cursor: pointer; transition: background-color 0.2s; }
+    .switch input::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform 0.2s, background-color 0.2s; }
+    .switch input:checked { background: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+    .switch input:checked::before { transform: translateX(14px); background: var(--warn); }
+    .switch input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+    dialog { max-width: min(480px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text); }
+    dialog::backdrop { background: rgb(0 0 0 / 0.6); }
+    dialog h2 { margin: 0 0 8px; font: 600 18px var(--display); letter-spacing: -0.015em; text-transform: none; color: var(--text); }
+    dialog p { margin: 0 0 20px; font-size: 14px; color: var(--muted); }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .actions button { padding: 9px 14px; border: 1px solid var(--line); border-radius: 9px; font: 500 14px var(--display); cursor: pointer; }
+    .actions button[value="release"] { border-color: transparent; background: var(--text); color: var(--bg); }
+    .actions button[value="head"] { background: transparent; color: var(--muted); }
+    .actions button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
     footer { margin-top: 40px; color: var(--muted); font-size: 14px; }
     footer a { color: var(--text); text-underline-offset: 3px; }
     footer strong { color: var(--text); font-weight: 600; }
@@ -73,7 +93,10 @@
 </head>
 <body>
   <main>
-    <p class="host">playground.daijro.dev</p>
+    <div class="topbar">
+      <p class="host">playground.daijro.dev</p>
+      <label class="switch"><input type="checkbox" role="switch" id="latest">Latest commits</label>
+    </div>
     <h1>Desktop apps,<br>in a browser tab.</h1>
     <nav aria-label="Apps">
       <!-- groups -->
@@ -84,5 +107,52 @@
       <p>This site's source: <a href="https://github.com/daijro/openplayground">daijro/openplayground</a>.</p>
     </footer>
   </main>
+  <dialog id="unstable" aria-labelledby="unstable-title">
+    <h2 id="unstable-title">Latest commits are unstable</h2>
+    <p>These builds come straight from each app's newest code, before it's released. They're untested and highly unrecommended: an app may not load, may crash, or may lose your work.</p>
+    <form method="dialog" class="actions">
+      <button value="head">Use latest commits anyway</button>
+      <button value="release" autofocus>Switch back to releases</button>
+    </form>
+  </dialog>
+  <script>
+    // The "Latest commits" switch: point every card at its release or its latest-commit build (with the
+    // commit's age), and remember the choice in this browser. Turning it on the first time warns first.
+    {
+      const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
+      const units = [['year', 31536e3], ['month', 2592e3], ['week', 6048e2], ['day', 864e2], ['hour', 3600], ['minute', 60]]
+      const ago = (iso) => {
+        const s = (Date.parse(iso) - Date.now()) / 1000
+        const [unit, size] = units.find(([, n]) => Math.abs(s) >= n) ?? ['minute', 60]
+        return rtf.format(Math.round(s / size), unit)
+      }
+      const store = (key, value) => {
+        try {
+          return value === undefined ? localStorage.getItem(key) : localStorage.setItem(key, value)
+        } catch {}
+      }
+      const toggle = document.getElementById('latest')
+      const dialog = document.getElementById('unstable')
+      const use = (channel) => {
+        const head = channel === 'head'
+        toggle.checked = head
+        for (const card of document.querySelectorAll('.tool')) {
+          const source = card.querySelector('.source')
+          card.href = head ? card.dataset.headHref : card.dataset.releaseHref
+          source.textContent = head ? source.dataset.head + (source.dataset.date ? ` · ${ago(source.dataset.date)}` : '') : source.dataset.release
+        }
+        store('channel', channel)
+      }
+      use(store('channel') === 'head' ? 'head' : 'release')
+      toggle.addEventListener('change', () => {
+        use(toggle.checked ? 'head' : 'release')
+        if (toggle.checked && !store('warned')) dialog.showModal()
+      })
+      dialog.addEventListener('close', () => {
+        store('warned', '1')
+        if (dialog.returnValue === 'release') use('release')
+      })
+    }
+  </script>
 </body>
 </html>

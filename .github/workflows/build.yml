@@ -1,8 +1,9 @@
 name: Build apps
 
-# Builds each app from source (scripts/build.mjs: its patches and wasm-opt -O3) whenever its upstream
-# release, its patches or the build recipe change, one parallel job per app, and publishes the zips to
-# the `builds` release. fetch.yml then installs them; a failed build leaves that app on its upstream release.
+# Builds each app from source (scripts/build.mjs: its patches and wasm-opt -O3) on both channels, its newest
+# release and its newest commit, whenever one of those, its patches or the build recipe change: one parallel
+# job per app and channel, publishing the zips to the `builds` release. fetch.yml then installs them; a
+# failed build leaves that channel on its upstream release, or its last good build.
 on:
   schedule:
     - cron: '7,22,37,52 * * * *'
@@ -23,7 +24,7 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
-      slugs: ${{ steps.plan.outputs.slugs }}
+      include: ${{ steps.plan.outputs.include }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -42,15 +43,19 @@ jobs:
 
   build:
     needs: plan
-    if: needs.plan.outputs.slugs != '[]'
+    if: needs.plan.outputs.include != '[]'
+    name: build (${{ matrix.slug }}, ${{ matrix.channel }})
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
-        slug: ${{ fromJSON(needs.plan.outputs.slugs) }}
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
     env:
       SLUG: ${{ matrix.slug }}
+      CHANNEL: ${{ matrix.channel }}
+      SRC: ${{ github.workspace }}/../build/${{ matrix.slug }}-${{ matrix.channel }}/src
+      TITLE: "Build failing: ${{ matrix.slug }}${{ matrix.channel == 'head' && ' (latest commit)' || '' }}"
       BUILD_DIR: ${{ github.workspace }}/../build
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
@@ -82,16 +87,17 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          echo "id=$(node scripts/build.mjs id "$SLUG")" >> "$GITHUB_OUTPUT"
-          node scripts/build.mjs build "$SLUG" 2>&1 | tee build.log
+          node scripts/build.mjs facts "$SLUG" "$CHANNEL" >> "$GITHUB_OUTPUT"
+          node scripts/build.mjs build "$SLUG" "$CHANNEL" 2>&1 | tee build.log
 
-      # A failed build usually means an upstream release changed the code a patch rule edits. Claude (signed
-      # in with the CLAUDE_CODE_OAUTH_TOKEN secret) rewrites this app's patch file until `check` passes; the
-      # full rebuild below decides whether the fix is kept. Claude's agent mode doesn't run on push events,
-      # so those leave it to the run the deploy job starts.
+      # A failed build usually means upstream changed the code a patch rule edits. Claude (signed in with the
+      # CLAUDE_CODE_OAUTH_TOKEN secret) rewrites this app's patch file until `check` passes on both channels,
+      # since one patch file serves both; the rebuild below decides whether the fix is kept. It runs once a day
+      # per app and channel (a broken branch would otherwise get an attempt per commit), and not on push
+      # events, which the action doesn't support: the deploy job starts a run for those.
       - id: repair
         name: Repair the patches with Claude
-        if: steps.build.outcome == 'failure' && env.HAS_CLAUDE == 'true' && github.event_name != 'push'
+        if: steps.build.outcome == 'failure' && env.HAS_CLAUDE == 'true' && github.event_name != 'push' && steps.build.outputs.failed_today != 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -103,23 +109,26 @@ jobs:
           claude_args: >-
             --max-turns 120
             --add-dir ${{ github.workspace }}/../build
-            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Bash(node scripts/build.mjs check ${{ matrix.slug }})"
+            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Bash(node scripts/build.mjs check ${{ matrix.slug }} release),Bash(node scripts/build.mjs check ${{ matrix.slug }} head)"
           prompt: |
-            The web build of the `${{ matrix.slug }}` app (see tools.yaml) failed in scripts/build.mjs. Its
+            The web build of the `${{ matrix.slug }}` app (see tools.yaml) on its `${{ matrix.channel }}` channel
+            (release: its newest release; head: the newest commit on its branch) failed in scripts/build.mjs. Its
             log is build.log, and the upstream source it builds is checked out in
-            ${{ github.workspace }}/../build/${{ matrix.slug }}/src, with the patch rules that matched already
-            applied. scripts/build.mjs explains the patch rule format.
+            ${{ github.workspace }}/../build/${{ matrix.slug }}-${{ matrix.channel }}/src, with the patch rules that
+            matched already applied. scripts/build.mjs explains the patch rule format.
 
-            Usually a new upstream release changed the code a rule in patches/${{ matrix.slug }}.yaml edits, so
-            the rule no longer matches or the patched code no longer compiles. Update
-            patches/${{ matrix.slug }}.yaml so every rule applies to the current upstream source and keeps doing
-            what the comment at the top of the file says. Prefer anchors that survive future releases: the
-            app's command names and type names rather than formatting or argument lists.
+            Usually upstream changed the code a rule in patches/${{ matrix.slug }}.yaml edits, so the rule no longer
+            matches or the patched code no longer compiles. Update patches/${{ matrix.slug }}.yaml so every rule
+            applies and keeps doing what the comment at the top of the file says, on BOTH channels: the same
+            patch file builds the newest release and the newest commit, so a fix must not break the other one.
+            Prefer anchors that survive future releases: the app's command names and type names rather than
+            formatting or argument lists.
 
-            Check your change with `node scripts/build.mjs check ${{ matrix.slug }}` (it re-clones and re-applies
-            the patches, then compiles) and repeat until it passes. Only edit patches/${{ matrix.slug }}.yaml.
-            If the failure has nothing to do with the patches (a network error, or upstream code that doesn't
-            build at all), change nothing and say so.
+            Check with `node scripts/build.mjs check ${{ matrix.slug }} release` and
+            `node scripts/build.mjs check ${{ matrix.slug }} head` (each re-clones and re-applies the patches,
+            then compiles; a channel without a version is skipped) and repeat until both pass. Only edit
+            patches/${{ matrix.slug }}.yaml. If the failure has nothing to do with the patches (a network error,
+            or upstream code that doesn't build at all), change nothing and say so.
 
       - id: rebuild
         name: Rebuild with the repaired patches
@@ -129,7 +138,8 @@ jobs:
         run: |
           if git diff --quiet "patches/$SLUG.yaml"; then echo "Claude left the patches unchanged."; exit 1; fi
           git diff "patches/$SLUG.yaml"
-          node scripts/build.mjs build "$SLUG"
+          node scripts/build.mjs build "$SLUG" "$CHANNEL"
+          node scripts/build.mjs check "$SLUG" "$([ "$CHANNEL" = head ] && echo release || echo head)"
 
       - name: Commit the repaired patches
         if: steps.rebuild.outcome == 'success'
@@ -137,51 +147,53 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -q "patches/$SLUG.yaml" -m "Repair $SLUG patches for ${{ steps.build.outputs.id }}" \
-            -m "The build failed with the old rules. Claude rewrote them in the Build apps workflow, and the app rebuilt with the new ones."
+            -m "The $CHANNEL build failed with the old rules. Claude rewrote them in the Build apps workflow; the app rebuilt with the new ones, and its other channel still compiles."
           git pull -q --rebase && git push -q
 
-      - name: Publish, keeping this app's 3 newest builds
+      - name: Publish, keeping this channel's 3 newest builds
         if: steps.build.outcome == 'success' || steps.rebuild.outcome == 'success'
         run: |
           gh release upload builds out/*.zip --clobber
-          gh release view builds --json assets -q '.assets[].name' | grep -E "^$SLUG-.*\.failed$" | xargs -r -n1 gh release delete-asset builds -y
-          gh release view builds --json assets -q "[.assets[] | select(.name | startswith(\"$SLUG-\") and endswith(\".zip\"))] | sort_by(.createdAt) | reverse | .[3:] | .[].name" \
+          gh release view builds --json assets -q '.assets[].name' | grep -E "^$SLUG-.*\.failed$" | grep -E "^$SLUG-head-" $([ "$CHANNEL" = head ] || echo -v) \
             | xargs -r -n1 gh release delete-asset builds -y
+          node scripts/build.mjs prune "$SLUG" "$CHANNEL" | xargs -r -n1 gh release delete-asset builds -y
           # Builds again: close its build-failure issue.
-          for n in $(gh issue list --label build-failure --state open --json number,title -q ".[] | select(.title == \"Build failing: $SLUG\") | .number"); do
+          for n in $(gh issue list --label build-failure --state open --json number,title -q ".[] | select(.title == \"$TITLE\") | .number"); do
             gh issue close "$n" --comment "Builds again: $(basename out/*.zip .zip) in [this run]($RUN_URL)."
           done
 
-      # The site keeps this app's upstream release meanwhile. The marker stops retries for a day, or until
-      # the release or the patches change.
-      # An earlier failure still on record (retries come a day apart) means it has failed for over a day:
-      # open an issue for it, once. Publishing a build of the app closes it.
+      # The site keeps this channel's upstream release or last good build meanwhile. The marker stops retries
+      # for a day, or until the version or the patches change. A failure while an earlier one is still on
+      # record (retries come a day apart) has lasted over a day: open an issue for it, once.
       - name: Record the failure
         if: steps.build.outcome == 'failure' && steps.rebuild.outcome != 'success'
         env:
           ID: ${{ steps.build.outputs.id }}
           REPAIR: ${{ steps.repair.outcome }}
+          FAILED_BEFORE: ${{ steps.build.outputs.failed_before }}
+          FAILED_TODAY: ${{ steps.build.outputs.failed_today }}
         run: |
-          if [ "${{ github.event_name }}" != push ]; then
-            earlier=$(gh release view builds --json assets -q "[.assets[] | select(.name | startswith(\"$SLUG-\") and endswith(\".failed\")) | select(now - (.createdAt | fromdate) > 82800)] | length")
+          if [ -n "$ID" ] && [ "${{ github.event_name }}" != push ]; then
             echo "Build failed; see the Build apps run log." > "$ID.failed"
             gh release upload builds "$ID.failed" --clobber
-            open=$(gh issue list --label build-failure --state open --json title -q "[.[] | select(.title == \"Build failing: $SLUG\")] | length")
-            if [ "$earlier" -gt 0 ] && [ "$open" -eq 0 ]; then
+            open=$(gh issue list --label build-failure --state open --json title -q "[.[] | select(.title == \"$TITLE\")] | length")
+            if [ "$FAILED_BEFORE" = true ] && [ "$open" -eq 0 ]; then
               gh label create build-failure --color D93F0B --description "An app has failed to build for over a day" 2>/dev/null || true
               case "$REPAIR" in
                 success) repair="Claude tried to repair its patches, but the app still didn't build with them." ;;
                 failure) repair="Claude's patch repair failed to run (see the run log)." ;;
-                *) repair="Claude's patch repair didn't run (no CLAUDE_CODE_OAUTH_TOKEN secret)." ;;
+                *) if [ "$FAILED_TODAY" = true ]; then repair="Claude already tried a repair in the last day."; else repair="Claude's patch repair didn't run (no CLAUDE_CODE_OAUTH_TOKEN secret)."; fi ;;
               esac
-              gh issue create --label build-failure --title "Build failing: $SLUG" --body "$(printf '%s\n' \
-                "The **$SLUG** build has failed for over a day. Meanwhile the site serves the app's upstream release (or, for an app built from a branch, its last good build), so it keeps working." \
+              [ "$CHANNEL" = head ] && which="newest commit" || which="newest release"
+              [ "$CHANNEL" = head ] && meanwhile="its last good latest-commit build" || meanwhile="the app's upstream release"
+              gh issue create --label build-failure --title "$TITLE" --body "$(printf '%s\n' \
+                "The **$SLUG** build of its $which has failed for over a day. Meanwhile the site serves $meanwhile, so it keeps working." \
                 "" \
                 "- Failing build: \`$ID\`" \
                 "- Latest attempt: [run]($RUN_URL)" \
                 "- $repair" \
                 "" \
-                "Patch problems are repaired automatically, so the likely causes are upstream code that doesn't build at this version, which the next upstream release may fix, or a build recipe that needs updating (\`scripts/build.mjs\`, \`.github/workflows/build.yml\`)." \
+                "Patch problems are repaired automatically, so the likely causes are upstream code that doesn't build at this version, which a later version may fix, or a build recipe that needs updating (\`scripts/build.mjs\`, \`.github/workflows/build.yml\`)." \
                 "" \
                 "The build is retried daily and as soon as a new version or patch lands. This issue closes itself when the app builds again.")"
             fi

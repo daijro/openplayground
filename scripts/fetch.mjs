@@ -1,12 +1,13 @@
-// Downloads each tool's web build (see tools.yaml) into public/<slug>/: our build of its newest release
-// (scripts/build.mjs) when there is one, else the upstream release.
+// Downloads each tool's web builds (see tools.yaml) on both channels (releases.mjs): its newest release into
+// public/<slug>/, our build (scripts/build.mjs) when there is one, else the upstream release; and its newest
+// commit into public/head/<slug>/, our build of it, else our newest earlier one.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { JUNK, builtAssets, tools, upstreamRelease } from './releases.mjs'
+import { CHANNELS, JUNK, builtAssets, channelAssets, github, installDir, resolveVersion, tools } from './releases.mjs'
 
 const MAX_FILE = 25 * 1024 * 1024 // the host's per-file limit
 const prelude = readFileSync('scripts/page-prelude.js', 'utf8')
@@ -64,89 +65,104 @@ const patch = (t, dir) => {
 
 const built = await builtAssets()
 for (const t of tools) {
-  try {
-    const dir = join('public', t.slug)
-    const { release, asset: upstream } = await upstreamRelease(t)
-    // Our builds of this tool (<slug>-<tag>-<hash>.zip), newest first, and the newest of this release.
-    const builds = built
-      .filter((a) => a.name.startsWith(`${t.slug}-`) && /-[0-9a-f]{8}\.zip$/.test(a.name))
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    const ours = builds.find((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`))
-    // A build made here with build.mjs (out/<slug>-<tag>-<hash>.zip) wins, to try builds before CI publishes them.
-    const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort().at(-1)
-    const local = localZip && { name: localZip, path: join('out', localZip), updated_at: statSync(join('out', localZip)).mtime.toISOString(), size: statSync(join('out', localZip)).size }
-    // A tool built from a branch has no upstream zip: until its newest version is built, keep its newest
-    // earlier build; one that was never built is left out (the dashboard doesn't list it).
-    const previous = !upstream && builds[0]
-    const asset = local || ours || upstream || previous
-    if (!asset) {
-      console.warn(`${t.slug}: ${release.tag_name} isn't built yet and there's no earlier build: skipped`)
-      continue
+  for (const channel of CHANNELS) {
+    const name = channel === 'head' ? `${t.slug}@head` : t.slug
+    try {
+      await install(t, channel, name)
+    } catch (e) {
+      console.error(`${name}: ${e.message}`)
+      process.exitCode = 1
     }
-    const tag = asset === previous ? asset.name.slice(t.slug.length + 1, asset.name.lastIndexOf('-')) : release.tag_name
-    if (asset === previous) console.log(`${t.slug}: ${release.tag_name} isn't built yet, keeping ${tag}`)
-
-    const stamp = JSON.stringify({ tag, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
-    if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
-      console.log(`${t.slug}: ${asset.name} already installed`)
-      patch(t, dir)
-    } else {
-      console.log(`${t.slug}: downloading ${asset.name} (${(asset.size / 1e6).toFixed(0)} MB)`)
-      const tmp = mkdtempSync(join(tmpdir(), 'playground-'))
-      try {
-        if (asset.path) {
-          cpSync(asset.path, join(tmp, 'build.zip'))
-        } else {
-          const zip = await fetch(asset.browser_download_url)
-          if (!zip.ok) throw new Error(`download ${zip.status}`)
-          writeFileSync(join(tmp, 'build.zip'), Buffer.from(await zip.arrayBuffer()))
-        }
-        execFileSync('unzip', ['-q', join(tmp, 'build.zip'), '-d', join(tmp, 'x')])
-        // Archives hold one top-level folder (name-web-x.y.z/); use it if present.
-        let root = join(tmp, 'x')
-        const top = readdirSync(root, { withFileTypes: true })
-        if (top.length === 1 && top[0].isDirectory()) root = join(root, top[0].name)
-        if (!existsSync(join(root, 'index.html'))) throw new Error(`${asset.name} has no index.html`)
-
-        // Prepare the finished build in tmp, then sync it in below.
-        const next = join(tmp, 'next')
-        for (const f of readdirSync(root)) if (!JUNK.test(f)) cpSync(join(root, f), join(next, f), { recursive: true })
-        // Gzip the .wasm files to fit MAX_FILE; page-prelude.js unzips them in the browser.
-        for (const f of readdirSync(next, { recursive: true })) {
-          if (!f.endsWith('.wasm')) continue
-          writeFileSync(join(next, `${f}.gz`), gzipSync(readFileSync(join(next, f)), { level: 9 }))
-          rmSync(join(next, f))
-        }
-        writeFileSync(join(next, '.release'), stamp)
-        patch(t, next)
-
-        // Overwrite in place and delete only what's gone: deleting and re-adding the same path races in
-        // Vite's dev server, which then 404s the file until restarted.
-        mkdirSync(dir, { recursive: true })
-        const keep = new Set(readdirSync(next, { recursive: true }))
-        for (const f of readdirSync(dir, { recursive: true })) if (!keep.has(f)) rmSync(join(dir, f), { recursive: true, force: true })
-        cpSync(next, dir, { recursive: true })
-      } finally {
-        rmSync(tmp, { recursive: true, force: true })
-      }
-    }
-
-    for (const f of readdirSync(dir, { recursive: true })) {
-      if (statSync(join(dir, f)).size > MAX_FILE) console.warn(`${t.slug}: ${f} is over 25 MiB, the host will reject it`)
-    }
-  } catch (e) {
-    console.error(`${t.slug}: ${e.message}`)
-    process.exitCode = 1
   }
 }
 
-// The installed release of each tool, with +<hash> for our builds. The scheduled workflow commits this when
-// it changes, and that push is what makes Cloudflare rebuild and redeploy the site.
+async function install(t, channel, name) {
+  const dir = installDir(t, channel)
+  const version = await resolveVersion(t, channel)
+  if (!version) {
+    rmSync(dir, { recursive: true, force: true }) // a channel the tool no longer has
+    return console.log(`${name}: no ${channel} version`)
+  }
+  const { release, asset: upstream } = version
+  // Our builds of this tool on this channel, newest first, and the newest of this version.
+  const builds = channelAssets(built, t, channel)
+  const ours = builds.find((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`))
+  // A build made here with build.mjs (out/<slug>-<tag>-<hash>.zip) wins, to try builds before CI publishes them.
+  const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort().at(-1)
+  const local = localZip && { name: localZip, path: join('out', localZip), updated_at: statSync(join('out', localZip)).mtime.toISOString(), size: statSync(join('out', localZip)).size }
+  // The head channel has no upstream zip: until its newest commit is built, keep its newest earlier build;
+  // one never built is left out (the dashboard doesn't list it).
+  const previous = !upstream && !ours && builds[0]
+  const asset = local || ours || upstream || previous
+  if (!asset) return console.warn(`${name}: ${release.tag_name} isn't built yet and there's no earlier build: skipped`)
+  let { tag_name: tag, label, date } = release
+  if (asset === previous) {
+    tag = asset.name.slice(t.slug.length + 1, asset.name.lastIndexOf('-'))
+    const commit = tag.replace(/^head-/, '')
+    date = (await github(`repos/${t.repo}/commits/${commit}`)).commit.committer.date
+    label = `${t.branch ?? 'main'}@${commit}`
+    console.log(`${name}: ${release.tag_name} isn't built yet, keeping ${tag}`)
+  }
+
+  const stamp = JSON.stringify({ tag, label: label ?? tag, date, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
+  if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
+    console.log(`${name}: ${asset.name} already installed`)
+    patch(t, dir)
+  } else {
+    console.log(`${name}: downloading ${asset.name} (${(asset.size / 1e6).toFixed(0)} MB)`)
+    const tmp = mkdtempSync(join(tmpdir(), 'playground-'))
+    try {
+      if (asset.path) {
+        cpSync(asset.path, join(tmp, 'build.zip'))
+      } else {
+        const zip = await fetch(asset.browser_download_url)
+        if (!zip.ok) throw new Error(`download ${zip.status}`)
+        writeFileSync(join(tmp, 'build.zip'), Buffer.from(await zip.arrayBuffer()))
+      }
+      execFileSync('unzip', ['-q', join(tmp, 'build.zip'), '-d', join(tmp, 'x')])
+      // Archives hold one top-level folder (name-web-x.y.z/); use it if present.
+      let root = join(tmp, 'x')
+      const top = readdirSync(root, { withFileTypes: true })
+      if (top.length === 1 && top[0].isDirectory()) root = join(root, top[0].name)
+      if (!existsSync(join(root, 'index.html'))) throw new Error(`${asset.name} has no index.html`)
+
+      // Prepare the finished build in tmp, then sync it in below.
+      const next = join(tmp, 'next')
+      for (const f of readdirSync(root)) if (!JUNK.test(f)) cpSync(join(root, f), join(next, f), { recursive: true })
+      // Gzip the .wasm files to fit MAX_FILE; page-prelude.js unzips them in the browser.
+      for (const f of readdirSync(next, { recursive: true })) {
+        if (!f.endsWith('.wasm')) continue
+        writeFileSync(join(next, `${f}.gz`), gzipSync(readFileSync(join(next, f)), { level: 9 }))
+        rmSync(join(next, f))
+      }
+      writeFileSync(join(next, '.release'), stamp)
+      patch(t, next)
+
+      // Overwrite in place and delete only what's gone: deleting and re-adding the same path races in
+      // Vite's dev server, which then 404s the file until restarted.
+      mkdirSync(dir, { recursive: true })
+      const keep = new Set(readdirSync(next, { recursive: true }))
+      for (const f of readdirSync(dir, { recursive: true })) if (!keep.has(f)) rmSync(join(dir, f), { recursive: true, force: true })
+      cpSync(next, dir, { recursive: true })
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  }
+
+  for (const f of readdirSync(dir, { recursive: true })) {
+    if (statSync(join(dir, f)).size > MAX_FILE) console.warn(`${name}: ${f} is over 25 MiB, the host will reject it`)
+  }
+}
+
+// The installed version of each tool on each channel (<slug>, <slug>@head), with +<hash> for our builds. The
+// scheduled workflow commits this when it changes, and that push is what makes Cloudflare redeploy the site.
 const versions = {}
 for (const t of tools) {
-  const stamp = join('public', t.slug, '.release')
-  if (!existsSync(stamp)) continue
-  const { tag, asset, built } = JSON.parse(readFileSync(stamp, 'utf8'))
-  versions[t.slug] = built ? `${tag}+${asset.match(/-([0-9a-f]{8})\.zip$/)[1]}` : tag
+  for (const channel of CHANNELS) {
+    const stamp = join(installDir(t, channel), '.release')
+    if (!existsSync(stamp)) continue
+    const { tag, asset, built } = JSON.parse(readFileSync(stamp, 'utf8'))
+    versions[channel === 'head' ? `${t.slug}@head` : t.slug] = built ? `${tag}+${asset.match(/-([0-9a-f]{8})\.zip$/)[1]}` : tag
+  }
 }
 writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n')

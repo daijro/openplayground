@@ -2,22 +2,31 @@ import { existsSync, readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import { parse } from 'yaml'
 
-// Release tag `make fetch` installed for a tool, if any.
-const installedTag = (slug) => {
+// What `make fetch` installed of a tool on a channel (its .release stamp), and where it's served.
+const installed = (t, channel) => {
+  const path = channel === 'head' ? `/head/${t.slug}/` : `/${t.slug}/`
   try {
-    return JSON.parse(readFileSync(`public/${slug}/.release`, 'utf8')).tag
+    return { path, ...JSON.parse(readFileSync(`public${path}.release`, 'utf8')) }
   } catch {}
 }
 
-const card = (t) => `
-      <a class="tool" href="/${t.slug}/" style="--accent:${t.accent};--base:${t.base}">
+// A card links to the release, and carries the latest-commit build's link, label and commit date for the
+// channel switch (index.html). A tool missing one channel uses the other for both.
+const card = (t) => {
+  const repo = t.repo.split('/')[1]
+  const release = installed(t, 'release')
+  const head = installed(t, 'head') ?? release
+  const shown = release ?? head
+  return `
+      <a class="tool" href="${shown.path}" data-release-href="${shown.path}" data-head-href="${head.path}" style="--accent:${t.accent};--base:${t.base}">
         <img src="/${t.icon}" alt="" width="64" height="64">
         <span class="title">
           <span class="name">${t.name}</span>
-          <span class="source">${[t.repo.split('/')[1], installedTag(t.slug)].filter(Boolean).join(' ')}</span>
+          <span class="source" data-release="${repo} ${shown.label}" data-head="${repo} ${head.label}" data-date="${head.date ?? ''}">${repo} ${shown.label}</span>
         </span>
         <span class="blurb">${t.blurb}</span>
       </a>`
+}
 
 const group = (g) => `
     <section>
@@ -30,7 +39,7 @@ const group = (g) => `
 // listed (one whose first build isn't ready yet has nothing to open).
 const renderGroups = () =>
   parse(readFileSync('tools.yaml', 'utf8'))
-    .groups.map((g) => ({ ...g, tools: g.tools.filter((t) => existsSync(`public/${t.slug}/index.html`)) }))
+    .groups.map((g) => ({ ...g, tools: g.tools.filter((t) => installed(t, 'release') || installed(t, 'head')) }))
     .filter((g) => g.tools.length)
     .map(group)
     .join('')
