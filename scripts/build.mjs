@@ -162,7 +162,8 @@ if (command === 'plan') {
   console.log(`failed_today=${failures.some((a) => age(a) < DAY)}`)
   console.log(`failed_before=${failures.some((a) => age(a) > DAY - 3600e3)}`)
 } else if (command === 'prune' && slug && CHANNELS.includes(channel)) {
-  for (const a of channelAssets(await builtAssets(), toolFor(slug), channel).slice(3)) console.log(a.name)
+  // Everything but the channel's newest build: fetch only ever installs that one.
+  for (const a of channelAssets(await builtAssets(), toolFor(slug), channel).slice(1)) console.log(a.name)
 } else if (command === 'source' && slug && CHANNELS.includes(channel)) {
   // The unpatched upstream code, for repairing the patches against (in <BUILD_DIR>/<slug>-<channel>/upstream).
   if (await resolveVersion(toolFor(slug), channel)) await prepare(slug, channel, { dir: 'upstream', patch: false })

@@ -162,7 +162,7 @@ jobs:
             -m "The $CHANNEL build failed with the old rules. Claude rewrote them in the Build apps workflow; the app rebuilt with the new ones, and its other channel still compiles."
           git pull -q --rebase && git push -q
 
-      - name: Publish, keeping this channel's 3 newest builds
+      - name: Publish, deleting this channel's older builds
         if: steps.build.outcome == 'success' || steps.rebuild.outcome == 'success'
         run: |
           gh release upload builds out/*.zip --clobber

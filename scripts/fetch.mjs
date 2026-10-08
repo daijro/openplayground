@@ -63,7 +63,7 @@ const patch = (t, dir) => {
   }
 }
 
-const built = await builtAssets()
+let built = await builtAssets()
 // Each tool's versions, looked up once: the head channel also needs the release, to count commits ahead.
 const versions = new Map()
 const version = (t, channel) => versions.get(`${t.slug} ${channel}`) ?? versions.set(`${t.slug} ${channel}`, resolveVersion(t, channel)).get(`${t.slug} ${channel}`)
@@ -71,7 +71,12 @@ for (const t of tools) {
   for (const channel of CHANNELS) {
     const name = channel === 'head' ? `${t.slug}@head` : t.slug
     try {
-      await install(t, channel, name)
+      // A build replaced (and deleted) between listing and downloading it: list again and take its successor.
+      await install(t, channel, name).catch(async (e) => {
+        if (!/download 404/.test(e.message)) throw e
+        built = await builtAssets()
+        await install(t, channel, name)
+      })
     } catch (e) {
       console.error(`${name}: ${e.message}`)
       process.exitCode = 1
