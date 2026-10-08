@@ -71,10 +71,13 @@ for (const t of tools) {
     const ours = built
       .filter((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`) && /-[0-9a-f]{8}\.zip$/.test(a.name))
       .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
-    const asset = ours ?? upstream
+    // A build made here with build.mjs (out/<slug>-<tag>-<hash>.zip) wins, to try builds before CI publishes them.
+    const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort().at(-1)
+    const local = localZip && { name: localZip, path: join('out', localZip), updated_at: statSync(join('out', localZip)).mtime.toISOString(), size: statSync(join('out', localZip)).size }
+    const asset = local || ours || upstream
     if (!asset) throw new Error(`${release.tag_name} isn't built yet (build.yml builds it)`)
 
-    const stamp = JSON.stringify({ tag: release.tag_name, asset: asset.name, updated_at: asset.updated_at, built: !!ours }) + '\n'
+    const stamp = JSON.stringify({ tag: release.tag_name, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours) }) + '\n'
     if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
       console.log(`${t.slug}: ${asset.name} already installed`)
       patch(t, dir)
@@ -82,9 +85,13 @@ for (const t of tools) {
       console.log(`${t.slug}: downloading ${asset.name} (${(asset.size / 1e6).toFixed(0)} MB)`)
       const tmp = mkdtempSync(join(tmpdir(), 'playground-'))
       try {
-        const zip = await fetch(asset.browser_download_url)
-        if (!zip.ok) throw new Error(`download ${zip.status}`)
-        writeFileSync(join(tmp, 'build.zip'), Buffer.from(await zip.arrayBuffer()))
+        if (asset.path) {
+          cpSync(asset.path, join(tmp, 'build.zip'))
+        } else {
+          const zip = await fetch(asset.browser_download_url)
+          if (!zip.ok) throw new Error(`download ${zip.status}`)
+          writeFileSync(join(tmp, 'build.zip'), Buffer.from(await zip.arrayBuffer()))
+        }
         execFileSync('unzip', ['-q', join(tmp, 'build.zip'), '-d', join(tmp, 'x')])
         // Archives hold one top-level folder (name-web-x.y.z/); use it if present.
         let root = join(tmp, 'x')
