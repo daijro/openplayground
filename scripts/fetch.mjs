@@ -6,10 +6,8 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { builtAssets, tools, upstreamRelease } from './releases.mjs'
+import { JUNK, builtAssets, tools, upstreamRelease } from './releases.mjs'
 
-// Cargo build leftovers and precompressed copies some archives ship with; _headers/.htaccess only work at the site root.
-const JUNK = /^(build|deps|incremental|examples|\.fingerprint|\.cargo-.*|_headers|\.htaccess|.*\.(gz|br))$/
 const MAX_FILE = 25 * 1024 * 1024 // the host's per-file limit
 const prelude = readFileSync('scripts/page-prelude.js', 'utf8')
 

@@ -5,6 +5,8 @@
 //
 //   node scripts/build.mjs plan          # GitHub Actions output: slugs=[...] still to build
 //   node scripts/build.mjs build <slug>  # build one (needs cargo, trunk and wasm-opt, see build.yml)
+//   node scripts/build.mjs check <slug>  # quick check: the patches apply and the app compiles
+//   node scripts/build.mjs id <slug>     # the build id (zip name) of the newest release
 //
 // Patch files hold a list of rules; each edits the first file (matching the `file` glob) where the
 // `find` regex matches, and must match, or the build fails:
@@ -17,9 +19,12 @@ import { cpSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, rea
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { builtAssets, tools, upstreamRelease } from './releases.mjs'
+import { JUNK, builtAssets, tools, upstreamRelease } from './releases.mjs'
 
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
+// Rust's default wasm32 features. wasm-opt reads them from the module's target_features section, which
+// some builds strip; without them it assumes the 2017 baseline and rejects e.g. memory.copy.
+const WASM_FEATURES = ['bulk-memory', 'bulk-memory-opt', 'call-indirect-overlong', 'multivalue', 'mutable-globals', 'nontrapping-float-to-int', 'reference-types', 'sign-ext'].map((f) => `--enable-${f}`)
 
 // Changes when the build recipe or the tool's patches change, so either one triggers a rebuild.
 const buildHash = (t) =>
@@ -62,19 +67,32 @@ const wasmBindgenPath = (src, cache) => {
   return `${dir}:${process.env.PATH}`
 }
 
-const build = async (slug) => {
-  const t = tools.find((x) => x.slug === slug)
-  if (!t) throw new Error(`no tool ${slug} in tools.yaml`)
+const toolFor = (slug) => tools.find((t) => t.slug === slug) ?? fail(`no tool ${slug} in tools.yaml`)
+const fail = (message) => {
+  throw new Error(message)
+}
+
+// A fresh checkout of the tool's newest release in <work>/src, with its patches applied.
+const prepare = async (slug) => {
+  const t = toolFor(slug)
   const { release } = await upstreamRelease(t)
-  const id = buildId(t, release.tag_name)
   const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, slug) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
   const src = join(work, 'src')
   rmSync(src, { recursive: true, force: true })
   run('git', ['clone', '--quiet', '--depth', '1', '--branch', release.tag_name, `https://github.com/${t.repo}.git`, src])
   if (t.patches) applyPatches(src, t.patches)
+  const web = globSync('apps/*-web/Cargo.toml', { cwd: src }).map((f) => join(src, f, '..'))[0] ?? fail(`${t.repo} has no apps/*-web crate`)
+  return { t, id: buildId(t, release.tag_name), work, src, web }
+}
 
-  const web = globSync('apps/*-web/Cargo.toml', { cwd: src }).map((f) => join(src, f, '..'))[0]
-  if (!web) throw new Error(`${t.repo} has no apps/*-web crate`)
+const check = async (slug) => {
+  const { work, web } = await prepare(slug)
+  run('cargo', ['check', '--target', 'wasm32-unknown-unknown'], { cwd: web, env: { ...process.env, CARGO_TARGET_DIR: join(work, 'target') } })
+  console.log(`${slug}: the patches apply and the app compiles`)
+}
+
+const build = async (slug) => {
+  const { id, work, src, web } = await prepare(slug)
   const dist = join(work, 'dist')
   rmSync(dist, { recursive: true, force: true })
   if (existsSync(join(web, 'Trunk.toml'))) {
@@ -83,15 +101,18 @@ const build = async (slug) => {
     writeFileSync(index, readFileSync(index, 'utf8').replace(/data-wasm-opt="[^"]*"/g, 'data-wasm-opt="0"'))
     run('trunk', ['build', '--release', '--dist', dist, '--public-url', './'], { cwd: web, env: { ...process.env, CARGO_TARGET_DIR: join(work, 'target') } })
   } else {
-    // `cargo xtask web` writes <target>/web/dist (and runs wasm-opt -O2 if it is on PATH: keep it off).
+    // `cargo xtask web` writes the site to <target>/web/dist or, in some releases, <target>/web (and runs
+    // wasm-opt -O2 if it is on PATH: keep it off).
     const target = join(work, 'target')
     run('cargo', ['xtask', 'web'], { cwd: src, env: { ...process.env, CARGO_TARGET_DIR: target, PATH: wasmBindgenPath(src, join(work, 'tools')) } })
-    cpSync(join(target, 'web', 'dist'), dist, { recursive: true })
+    const site = [join(target, 'web', 'dist'), join(target, 'web')].find((d) => existsSync(join(d, 'index.html')))
+    if (!site) throw new Error('cargo xtask web left no index.html in <target>/web/dist or <target>/web')
+    for (const f of readdirSync(site)) if (!JUNK.test(f)) cpSync(join(site, f), join(dist, f), { recursive: true })
   }
 
   for (const f of readdirSync(dist, { recursive: true }).filter((f) => f.endsWith('.wasm'))) {
     try {
-      run(WASM_OPT, ['-O3', '--strip-debug', join(dist, f), '-o', join(dist, f)])
+      run(WASM_OPT, ['-O3', '--strip-debug', ...WASM_FEATURES, join(dist, f), '-o', join(dist, f)])
     } catch {
       console.log(`::warning::${slug}: wasm-opt failed on ${f}, shipping it unoptimized`)
     }
@@ -106,16 +127,23 @@ const build = async (slug) => {
 
 const [command, slug] = process.argv.slice(2)
 if (command === 'plan') {
-  const built = new Set((await builtAssets()).map((a) => a.name))
+  // To build: tools whose build is missing, unless it failed (<id>.failed) in the last day. Failures are
+  // retried daily, and at once when the release or the patches change (a new id).
+  const assets = await builtAssets()
+  const has = (name, maxAge = Infinity) => assets.some((a) => a.name === name && Date.now() - Date.parse(a.created_at) < maxAge)
   const todo = []
   for (const t of tools) {
-    const { release } = await upstreamRelease(t)
-    if (!built.has(`${buildId(t, release.tag_name)}.zip`)) todo.push(t.slug)
+    const id = buildId(t, (await upstreamRelease(t)).release.tag_name)
+    if (!has(`${id}.zip`) && !has(`${id}.failed`, 24 * 3600e3)) todo.push(t.slug)
   }
   console.log(`slugs=${JSON.stringify(todo)}`)
+} else if (command === 'id' && slug) {
+  console.log(buildId(toolFor(slug), (await upstreamRelease(toolFor(slug))).release.tag_name))
+} else if (command === 'check' && slug) {
+  await check(slug)
 } else if (command === 'build' && slug) {
   await build(slug)
 } else {
-  console.error('usage: node scripts/build.mjs plan | build <slug>')
+  console.error('usage: node scripts/build.mjs plan | build <slug> | check <slug> | id <slug>')
   process.exit(2)
 }

@@ -4,6 +4,9 @@ import { parse } from 'yaml'
 
 export const tools = parse(readFileSync('tools.yaml', 'utf8')).groups.flatMap((g) => g.tools)
 export const headers = process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}
+// Cargo build leftovers and precompressed copies some web builds include (LightCraft's site folder is also
+// cargo's folder for its `web` profile); _headers/.htaccess only work at the site root.
+export const JUNK = /^(build|deps|incremental|examples|\.fingerprint|\.cargo-.*|_headers|\.htaccess|.*\.(gz|br))$/
 // Where build.mjs publishes the patched, optimized builds, as assets of one release.
 export const BUILDS = { repo: 'daijro/openplayground', tag: 'builds' }
 

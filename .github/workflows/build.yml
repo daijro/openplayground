@@ -43,11 +43,17 @@ jobs:
     needs: plan
     if: needs.plan.outputs.slugs != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         slug: ${{ fromJSON(needs.plan.outputs.slugs) }}
+    env:
+      SLUG: ${{ matrix.slug }}
+      BUILD_DIR: ${{ github.workspace }}/../build
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      HAS_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
     steps:
       - name: Free disk space for the Rust build
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -68,25 +74,96 @@ jobs:
           curl -sSfL "$url" | tar -xz -C ~/tools
           echo "$HOME/tools/bin" >> "$GITHUB_PATH"
           echo "WASM_OPT=$(ls ~/tools/binaryen-*/bin/wasm-opt)" >> "$GITHUB_ENV"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - run: node scripts/build.mjs build ${{ matrix.slug }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+
+      - id: build
+        name: Build
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "id=$(node scripts/build.mjs id "$SLUG")" >> "$GITHUB_OUTPUT"
+          node scripts/build.mjs build "$SLUG" 2>&1 | tee build.log
+
+      # A failed build usually means an upstream release changed the code a patch rule edits. Claude (signed
+      # in with the CLAUDE_CODE_OAUTH_TOKEN secret) rewrites this app's patch file until `check` passes; the
+      # full rebuild below decides whether the fix is kept. Claude's agent mode doesn't run on push events,
+      # so those leave it to the run the deploy job starts.
+      - id: repair
+        name: Repair the patches with Claude
+        if: steps.build.outcome == 'failure' && env.HAS_CLAUDE == 'true' && github.event_name != 'push'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          settings: '{"env": {"BASH_DEFAULT_TIMEOUT_MS": "1800000", "BASH_MAX_TIMEOUT_MS": "1800000"}}'
+          claude_args: >-
+            --max-turns 120
+            --add-dir ${{ github.workspace }}/../build
+            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Bash(node scripts/build.mjs check ${{ matrix.slug }})"
+          prompt: |
+            The web build of the `${{ matrix.slug }}` app (see tools.yaml) failed in scripts/build.mjs. Its
+            log is build.log, and the upstream source it builds is checked out in
+            ${{ github.workspace }}/../build/${{ matrix.slug }}/src, with the patch rules that matched already
+            applied. scripts/build.mjs explains the patch rule format.
+
+            Usually a new upstream release changed the code a rule in patches/${{ matrix.slug }}.yaml edits, so
+            the rule no longer matches or the patched code no longer compiles. Update
+            patches/${{ matrix.slug }}.yaml so every rule applies to the current upstream source and keeps doing
+            what the comment at the top of the file says. Prefer anchors that survive future releases: the
+            app's command names and type names rather than formatting or argument lists.
+
+            Check your change with `node scripts/build.mjs check ${{ matrix.slug }}` (it re-clones and re-applies
+            the patches, then compiles) and repeat until it passes. Only edit patches/${{ matrix.slug }}.yaml.
+            If the failure has nothing to do with the patches (a network error, or upstream code that doesn't
+            build at all), change nothing and say so.
+
+      - id: rebuild
+        name: Rebuild with the repaired patches
+        if: steps.repair.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          if git diff --quiet "patches/$SLUG.yaml"; then echo "Claude left the patches unchanged."; exit 1; fi
+          git diff "patches/$SLUG.yaml"
+          node scripts/build.mjs build "$SLUG"
+
+      - name: Commit the repaired patches
+        if: steps.rebuild.outcome == 'success'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -q "patches/$SLUG.yaml" -m "Repair $SLUG patches for ${{ steps.build.outputs.id }}" \
+            -m "The build failed with the old rules. Claude rewrote them in the Build apps workflow, and the app rebuilt with the new ones."
+          git pull -q --rebase && git push -q
+
       - name: Publish, keeping this app's 3 newest builds
+        if: steps.build.outcome == 'success' || steps.rebuild.outcome == 'success'
         run: |
           gh release upload builds out/*.zip --clobber
-          gh release view builds --json assets -q '[.assets[] | select(.name | startswith("${{ matrix.slug }}-"))] | sort_by(.createdAt) | reverse | .[3:] | .[].name' \
+          gh release view builds --json assets -q '.assets[].name' | grep -E "^$SLUG-.*\.failed$" | xargs -r -n1 gh release delete-asset builds -y
+          gh release view builds --json assets -q "[.assets[] | select(.name | startswith(\"$SLUG-\") and endswith(\".zip\"))] | sort_by(.createdAt) | reverse | .[3:] | .[].name" \
             | xargs -r -n1 gh release delete-asset builds -y
-        env:
-          GH_TOKEN: ${{ github.token }}
 
-  # Install whatever got built now, rather than at fetch.yml's next scheduled run.
+      # The site keeps this app's upstream release meanwhile. The marker stops retries for a day, or until
+      # the release or the patches change.
+      - name: Record the failure
+        if: steps.build.outcome == 'failure' && steps.rebuild.outcome != 'success'
+        run: |
+          if [ "${{ github.event_name }}" != push ]; then
+            echo "Build failed; see the Build apps run log." > "${{ steps.build.outputs.id }}.failed"
+            gh release upload builds "${{ steps.build.outputs.id }}.failed" --clobber
+          fi
+          exit 1
+
+  # Install whatever got built now, rather than at fetch.yml's next scheduled run. A push-triggered run
+  # with failures also starts a run where Claude can repair them.
   deploy:
     needs: build
     if: always() && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - run: gh workflow run fetch.yml -R ${{ github.repository }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - if: needs.build.result == 'failure' && github.event_name == 'push'
+        run: gh workflow run build.yml -R ${{ github.repository }}
