@@ -22,7 +22,7 @@ const card = (t) => {
         <img src="/${t.icon}" alt="" width="64" height="64">
         <span class="title">
           <span class="name">${t.name}</span>
-          <span class="source" data-release="${repo} ${shown.label}" data-head="${repo} ${head.label}" data-date="${head.date ?? ''}">${repo} ${shown.label}</span>
+          <span class="source" data-release="${repo} ${shown.label}" data-head="${repo} ${head.label}" data-date="${head.date ?? ''}" data-ahead="${head.ahead ? `${head.ahead.commits} commit${head.ahead.commits === 1 ? '' : 's'} ahead of ${head.ahead.of}` : ''}">${repo} ${shown.label}</span>
         </span>
         <span class="blurb">${t.blurb}</span>
       </a>`

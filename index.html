@@ -140,6 +140,7 @@
           const source = card.querySelector('.source')
           card.href = head ? card.dataset.headHref : card.dataset.releaseHref
           source.textContent = head ? source.dataset.head + (source.dataset.date ? ` · ${ago(source.dataset.date)}` : '') : source.dataset.release
+          card.title = head ? source.dataset.ahead : ''
         }
         store('channel', channel)
       }

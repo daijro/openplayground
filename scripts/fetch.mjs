@@ -64,6 +64,9 @@ const patch = (t, dir) => {
 }
 
 const built = await builtAssets()
+// Each tool's versions, looked up once: the head channel also needs the release, to count commits ahead.
+const versions = new Map()
+const version = (t, channel) => versions.get(`${t.slug} ${channel}`) ?? versions.set(`${t.slug} ${channel}`, resolveVersion(t, channel)).get(`${t.slug} ${channel}`)
 for (const t of tools) {
   for (const channel of CHANNELS) {
     const name = channel === 'head' ? `${t.slug}@head` : t.slug
@@ -78,12 +81,12 @@ for (const t of tools) {
 
 async function install(t, channel, name) {
   const dir = installDir(t, channel)
-  const version = await resolveVersion(t, channel)
-  if (!version) {
+  const current = await version(t, channel)
+  if (!current) {
     rmSync(dir, { recursive: true, force: true }) // a channel the tool no longer has
     return console.log(`${name}: no ${channel} version`)
   }
-  const { release, asset: upstream } = version
+  const { release, asset: upstream } = current
   // Our builds of this tool on this channel, newest first, and the newest of this version.
   const builds = channelAssets(built, t, channel)
   const ours = builds.find((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`))
@@ -104,7 +107,15 @@ async function install(t, channel, name) {
     console.log(`${name}: ${release.tag_name} isn't built yet, keeping ${tag}`)
   }
 
-  const stamp = JSON.stringify({ tag, label: label ?? tag, date, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
+  // How far a head build is past the tool's newest release, for the dashboard's tooltip.
+  let ahead
+  const latest = channel === 'head' && (await version(t, 'release'))
+  if (latest) {
+    const compare = await github(`repos/${t.repo}/compare/${latest.release.tag_name}...${tag.replace(/^head-/, '')}`)
+    ahead = { commits: compare.ahead_by, of: latest.release.tag_name }
+  }
+
+  const stamp = JSON.stringify({ tag, label: label ?? tag, date, ahead, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
   if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
     console.log(`${name}: ${asset.name} already installed`)
     patch(t, dir)
@@ -156,13 +167,13 @@ async function install(t, channel, name) {
 
 // The installed version of each tool on each channel (<slug>, <slug>@head), with +<hash> for our builds. The
 // scheduled workflow commits this when it changes, and that push is what makes Cloudflare redeploy the site.
-const versions = {}
+const installedVersions = {}
 for (const t of tools) {
   for (const channel of CHANNELS) {
     const stamp = join(installDir(t, channel), '.release')
     if (!existsSync(stamp)) continue
     const { tag, asset, built } = JSON.parse(readFileSync(stamp, 'utf8'))
-    versions[channel === 'head' ? `${t.slug}@head` : t.slug] = built ? `${tag}+${asset.match(/-([0-9a-f]{8})\.zip$/)[1]}` : tag
+    installedVersions[channel === 'head' ? `${t.slug}@head` : t.slug] = built ? `${tag}+${asset.match(/-([0-9a-f]{8})\.zip$/)[1]}` : tag
   }
 }
-writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n')
+writeFileSync('versions.json', JSON.stringify(installedVersions, null, 2) + '\n')
