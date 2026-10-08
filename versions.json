@@ -2,13 +2,15 @@
   "photoshop": "v0.3.0+b8d9d461",
   "illustrator": "v0.4.0+e9f97aa8",
   "indesign": "v0.2.1+ef8eb72c",
-  "lightroom": "v0.2.1+b8d9d461",
+  "lightroom": "v0.2.1+3c608384",
   "premiere": "v0.2.1+b8d9d461",
   "after-effects": "v0.4.0+cabf1479",
   "acrobat": "v0.2.1+b8d9d461",
   "word": "v0.1.0+a0693333",
-  "excel": "v0.1.0+e49293c4",
+  "excel": "v0.1.0+4091bfe1",
+  "excel@head": "head-c6b6f41+4091bfe1",
   "powerpoint": "v0.1.0+a6908565",
   "autocad": "v0.1.0+b8d9d461",
-  "pro-tools@head": "head-4627084+b8d9d461"
+  "autocad@head": "head-1d7ea87+3c608384",
+  "pro-tools@head": "head-4627084+3c608384"
 }
