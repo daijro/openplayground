@@ -1,0 +1,10 @@
+// A static-assets-only Worker: Cloudflare serves the Vite build as is (folders like /photoshop/ get their
+// index.html, and /photoshop redirects to /photoshop/).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openplayground",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}

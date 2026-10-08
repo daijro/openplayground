@@ -117,3 +117,12 @@ for (const t of tools) {
     process.exitCode = 1
   }
 }
+
+// The installed release of each tool. The scheduled workflow commits this when it changes, and that push
+// is what makes Cloudflare rebuild and redeploy the site.
+const versions = {}
+for (const t of tools) {
+  const stamp = join('public', t.slug, '.release')
+  if (existsSync(stamp)) versions[t.slug] = JSON.parse(readFileSync(stamp, 'utf8')).tag
+}
+writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n')

@@ -10,6 +10,9 @@ on:
 concurrency:
   group: fetch
 
+permissions:
+  contents: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -38,3 +41,14 @@ jobs:
           key: tools-${{ hashFiles('public/*/.release') }}
 
       - run: make build
+
+      # Cloudflare rebuilds and redeploys the site on every push to main, so committing a changed
+      # versions.json is what ships a new release. (Pushes made with the workflow's token don't re-run it.)
+      - name: Commit version changes
+        run: |
+          git diff --quiet versions.json && exit 0
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          changes=$(git diff -U0 versions.json | sed -nE 's/^\+ +"([^"]+)": "([^"]+)".*/\1 \2/p' | paste -sd, - | sed 's/,/, /g')
+          git commit -q -m "Update $changes" versions.json
+          git pull -q --rebase && git push -q

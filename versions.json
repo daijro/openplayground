@@ -1,0 +1,12 @@
+{
+  "photoshop": "v0.3.0",
+  "illustrator": "v0.4.0",
+  "indesign": "v0.2.1",
+  "lightroom": "v0.2.1",
+  "premiere": "v0.2.1",
+  "after-effects": "v0.4.0",
+  "acrobat": "v0.2.1",
+  "word": "v0.1.0",
+  "excel": "v0.1.0",
+  "powerpoint": "v0.1.0"
+}
