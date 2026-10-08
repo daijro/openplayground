@@ -74,12 +74,12 @@ const fail = (message) => {
   throw new Error(message)
 }
 
-// A fresh checkout of the tool's version on a channel in <work>/src, with its patches applied.
-const prepare = async (slug, channel) => {
+// A fresh checkout of the tool's version on a channel in <work>/<dir>, with its patches applied (unless patch is false).
+const prepare = async (slug, channel, { dir = 'src', patch = true } = {}) => {
   const t = toolFor(slug)
   const { release } = (await resolveVersion(t, channel)) ?? fail(`${slug} has no ${channel} version`)
   const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, `${slug}-${channel}`) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
-  const src = join(work, 'src')
+  const src = join(work, dir)
   rmSync(src, { recursive: true, force: true })
   if (release.ref) {
     // A commit (the head channel): fetch exactly that one.
@@ -89,7 +89,7 @@ const prepare = async (slug, channel) => {
   } else {
     run('git', ['clone', '--quiet', '--depth', '1', '--branch', release.tag_name, `https://github.com/${t.repo}.git`, src])
   }
-  if (t.patches) applyPatches(src, t.patches)
+  if (t.patches && patch) applyPatches(src, t.patches)
   const web = globSync('apps/*-web/Cargo.toml', { cwd: src }).map((f) => join(src, f, '..'))[0] ?? fail(`${t.repo} has no apps/*-web crate`)
   return { t, id: buildId(t, release.tag_name), work, src, web }
 }
@@ -163,11 +163,14 @@ if (command === 'plan') {
   console.log(`failed_before=${failures.some((a) => age(a) > DAY - 3600e3)}`)
 } else if (command === 'prune' && slug && CHANNELS.includes(channel)) {
   for (const a of channelAssets(await builtAssets(), toolFor(slug), channel).slice(3)) console.log(a.name)
+} else if (command === 'source' && slug && CHANNELS.includes(channel)) {
+  // The unpatched upstream code, for repairing the patches against (in <BUILD_DIR>/<slug>-<channel>/upstream).
+  if (await resolveVersion(toolFor(slug), channel)) await prepare(slug, channel, { dir: 'upstream', patch: false })
 } else if (command === 'check' && slug && CHANNELS.includes(channel)) {
   await check(slug, channel)
 } else if (command === 'build' && slug && CHANNELS.includes(channel)) {
   await build(slug, channel)
 } else {
-  console.error('usage: node scripts/build.mjs plan | build|check|facts|prune <slug> release|head')
+  console.error('usage: node scripts/build.mjs plan | build|check|source|facts|prune <slug> release|head')
   process.exit(2)
 }

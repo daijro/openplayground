@@ -1,10 +1,9 @@
 # Follow the browser's light/dark preference at startup (Dark in dark mode, Light otherwise), through
-# the app's view.darkMode command. Rule 1 makes the app binding mutable; rule 2 runs just before the app is handed to eframe.
-- file: apps/*-web/src/**/*.rs
-  find: 'let\s+(?:mut\s+)?app(\s*=\s*\w*App::new\()'
-  replace: 'let mut app$1'
+# the app's view.darkMode command.
+# Runs just before the app is handed to eframe, whatever built it, re-binding it as mutable.
 - file: apps/*-web/src/**/*.rs
   find: 'Ok\(Box::new\(\w*Shell\b'
   before: |
+    let mut app = app;
     let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|m| m.matches());
     let _ = app.run("view.darkMode", serde_json::json!({"on": dark}));

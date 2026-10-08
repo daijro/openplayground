@@ -95,6 +95,11 @@ jobs:
       # since one patch file serves both; the rebuild below decides whether the fix is kept. It runs once a day
       # per app and channel (a broken branch would otherwise get an attempt per commit), and not on push
       # events, which the action doesn't support: the deploy job starts a run for those.
+      - name: Check out both channels' upstream code for Claude
+        if: steps.build.outcome == 'failure' && env.HAS_CLAUDE == 'true' && github.event_name != 'push' && steps.build.outputs.failed_today != 'true'
+        continue-on-error: true
+        run: for c in release head; do node scripts/build.mjs source "$SLUG" "$c"; done
+
       - id: repair
         name: Repair the patches with Claude
         if: steps.build.outcome == 'failure' && env.HAS_CLAUDE == 'true' && github.event_name != 'push' && steps.build.outputs.failed_today != 'true'
@@ -113,9 +118,10 @@ jobs:
           prompt: |
             The web build of the `${{ matrix.slug }}` app (see tools.yaml) on its `${{ matrix.channel }}` channel
             (release: its newest release; head: the newest commit on its branch) failed in scripts/build.mjs. Its
-            log is build.log, and the upstream source it builds is checked out in
-            ${{ github.workspace }}/../build/${{ matrix.slug }}-${{ matrix.channel }}/src, with the patch rules that
-            matched already applied. scripts/build.mjs explains the patch rule format.
+            log is build.log. The unpatched upstream code of each channel is checked out in
+            ${{ github.workspace }}/../build/${{ matrix.slug }}-release/upstream and
+            ${{ github.workspace }}/../build/${{ matrix.slug }}-head/upstream (a channel without a version has none).
+            scripts/build.mjs explains the patch rule format.
 
             Usually upstream changed the code a rule in patches/${{ matrix.slug }}.yaml edits, so the rule no longer
             matches or the patched code no longer compiles. Update patches/${{ matrix.slug }}.yaml so every rule
@@ -124,9 +130,11 @@ jobs:
             Prefer anchors that survive future releases: the app's command names and type names rather than
             formatting or argument lists.
 
-            Check with `node scripts/build.mjs check ${{ matrix.slug }} release` and
-            `node scripts/build.mjs check ${{ matrix.slug }} head` (each re-clones and re-applies the patches,
-            then compiles; a channel without a version is skipped) and repeat until both pass. Only edit
+            Look at code with the Read, Grep and Glob tools; change the patch file with Edit or Write. The only
+            shell commands you can run are these two, as written or followed by `2>&1 | tail -n 60`:
+            `node scripts/build.mjs check ${{ matrix.slug }} release` and
+            `node scripts/build.mjs check ${{ matrix.slug }} head`. Each re-clones and re-applies the patches,
+            then compiles (a channel without a version is skipped). Repeat until both pass. Only edit
             patches/${{ matrix.slug }}.yaml. If the failure has nothing to do with the patches (a network error,
             or upstream code that doesn't build at all), change nothing and say so.
 
