@@ -3,6 +3,7 @@
 #   repo:   GitHub repo to download the web build from
 #   tag:    release tag to pin (optional; default: the newest non-prerelease that has a matching asset)
 #   branch: build the newest commit on this branch instead, for repos without web releases (optional)
+#   paths:  with `branch:`, only commits changing these paths count as new versions (optional; default: any)
 #   asset:  regex matching the release asset name (optional; default: "-web-.*\.zip$")
 #   icon:   dashboard icon, also copied in as the tool page's favicon
 #   accent, base: a light and a dark brand color, used for the dashboard hover
@@ -128,6 +129,8 @@ groups:
         blurb: Recording, editing and mixing audio.
         repo: storytold/soundcraft
         branch: main
+        # The web app, and the workspace it compiles: CI-only or desktop-only commits don't rebuild it.
+        paths: [apps/soundcraft-web, crates, Cargo.toml, Cargo.lock, assets]
         icon: icons/pro-tools.svg
         accent: "#A673FF"
         base: "#1F0B40"

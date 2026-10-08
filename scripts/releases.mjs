@@ -17,11 +17,16 @@ export const github = async (path) => {
 }
 
 // A tool's newest upstream release (or its pinned tag) that has a web build, and that build's asset. A tool
-// with `branch:` (a repo without web releases) gets the newest commit on that branch as a release named
-// <branch>-<commit>, with `ref` set to the commit and no asset: only build.mjs can make its build.
+// with `branch:` (a repo without web releases) gets, as a release named <branch>-<commit>, the newest
+// commit on that branch that changed one of its `paths:` (any commit without them), with `ref` set to
+// the commit and no asset: only build.mjs can make its build.
 export const upstreamRelease = async (t) => {
   if (t.branch) {
-    const { sha, commit } = await github(`repos/${t.repo}/commits/${t.branch}`)
+    const newest = await Promise.all(
+      (t.paths ?? ['']).map((p) => github(`repos/${t.repo}/commits?sha=${t.branch}&per_page=1${p ? `&path=${encodeURIComponent(p)}` : ''}`)),
+    ).then((lists) => lists.flat().sort((a, b) => b.commit.committer.date.localeCompare(a.commit.committer.date))[0])
+    if (!newest) throw new Error(`no commits on ${t.repo} ${t.branch} touch ${t.paths}`)
+    const { sha, commit } = newest
     return { release: { tag_name: `${t.branch}-${sha.slice(0, 7)}`, ref: sha, published_at: commit.committer.date }, asset: null }
   }
   const pattern = new RegExp(t.asset ?? '-web-.*\\.zip$')
