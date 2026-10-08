@@ -1,7 +1,7 @@
 {
   "photoshop": "v0.3.0+cc375ec6",
-  "photoshop@head": "head-173fc90+cc375ec6",
-  "illustrator": "v0.4.0+37a8e33a",
+  "photoshop@head": "head-c9a7d26+cc375ec6",
+  "illustrator": "v0.5.0",
   "illustrator@head": "head-d9fc3b6+37a8e33a",
   "indesign": "v0.2.1+bf0375f7",
   "indesign@head": "head-5382fd4+bf0375f7",
@@ -12,7 +12,7 @@
   "after-effects": "v0.4.0+9020f7cf",
   "after-effects@head": "head-fbc4080+9020f7cf",
   "acrobat": "v0.2.1+cc375ec6",
-  "acrobat@head": "head-4dd738b+cc375ec6",
+  "acrobat@head": "head-7965b49+cc375ec6",
   "word": "v0.1.0+75878e84",
   "word@head": "head-2ed3895+75878e84",
   "excel": "v0.1.0+b5d2b47e",
