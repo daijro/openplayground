@@ -1,5 +1,8 @@
 .PHONY: fetch dev build
 
+# GitHub's API allows 60 anonymous requests an hour; use the gh login when there is one (CI sets its own).
+export GITHUB_TOKEN ?= $(shell gh auth token 2>/dev/null)
+
 node_modules: package.json
 	npm install
 	@touch node_modules

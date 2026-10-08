@@ -5,6 +5,7 @@
 #   asset:  regex matching the release asset name (optional; default: "-web-.*\.zip$")
 #   icon:   dashboard icon, also copied in as the tool page's favicon
 #   accent, base: a light and a dark brand color, used for the dashboard hover
+#   theme:  script that makes the app follow the browser's light/dark preference (optional; see themes/)
 #
 # Run `make fetch` after editing.
 
@@ -16,6 +17,7 @@ groups:
         blurb: Layers, masks, adjustments, brushes and real PSD files.
         repo: storytold/photocraft
         icon: icons/photoshop.svg
+        theme: themes/photoshop.js
         accent: "#31A8FF"
         base: "#001E36"
 
@@ -24,6 +26,7 @@ groups:
         blurb: Vector paths, type and artboards.
         repo: storytold/vectorcraft
         icon: icons/illustrator.svg
+        theme: themes/illustrator.js
         accent: "#FF9A00"
         base: "#330000"
 
@@ -32,6 +35,7 @@ groups:
         blurb: Page layout and publishing.
         repo: storytold/designcraft
         icon: icons/indesign.svg
+        theme: themes/indesign.js
         accent: "#FF3366"
         base: "#49021F"
 
@@ -48,6 +52,7 @@ groups:
         blurb: Video editing, color and sound.
         repo: storytold/filmcraft
         icon: icons/premiere.svg
+        theme: themes/premiere.js
         accent: "#9999FF"
         base: "#00005B"
 
@@ -56,6 +61,7 @@ groups:
         blurb: Compositions, keyframes, effects and expressions.
         repo: storytold/effectcraft
         icon: icons/after-effects.svg
+        theme: themes/after-effects.js
         accent: "#9999FF"
         base: "#00005B"
 
@@ -64,6 +70,7 @@ groups:
         blurb: Read, organize, combine, split and secure PDFs.
         repo: storytold/pdfcraft
         icon: icons/acrobat.svg
+        theme: themes/acrobat.js
         accent: "#FA0F00"
         base: "#3A0400"
 
@@ -74,6 +81,7 @@ groups:
         blurb: Writing and document design.
         repo: storytold/wordcraft
         icon: icons/word.svg
+        theme: themes/word.js
         accent: "#41A5EE"
         base: "#0B2557"
 
@@ -82,6 +90,7 @@ groups:
         blurb: Spreadsheets and data.
         repo: storytold/gridcraft
         icon: icons/excel.svg
+        theme: themes/excel.js
         accent: "#33C481"
         base: "#062E19"
 
@@ -90,5 +99,6 @@ groups:
         blurb: Presentations and slide shows.
         repo: storytold/deckcraft
         icon: icons/powerpoint.svg
+        theme: themes/powerpoint.js
         accent: "#FF8F6B"
         base: "#3D1308"
