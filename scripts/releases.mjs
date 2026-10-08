@@ -16,8 +16,14 @@ export const github = async (path) => {
   return res.json()
 }
 
-// A tool's newest upstream release (or its pinned tag) that has a web build, and that build's asset.
+// A tool's newest upstream release (or its pinned tag) that has a web build, and that build's asset. A tool
+// with `branch:` (a repo without web releases) gets the newest commit on that branch as a release named
+// <branch>-<commit>, with `ref` set to the commit and no asset: only build.mjs can make its build.
 export const upstreamRelease = async (t) => {
+  if (t.branch) {
+    const { sha, commit } = await github(`repos/${t.repo}/commits/${t.branch}`)
+    return { release: { tag_name: `${t.branch}-${sha.slice(0, 7)}`, ref: sha, published_at: commit.committer.date }, asset: null }
+  }
   const pattern = new RegExp(t.asset ?? '-web-.*\\.zip$')
   const release = (await github(`repos/${t.repo}/releases?per_page=100`))
     .filter((r) => (t.tag ? r.tag_name === t.tag : !r.draft && !r.prerelease))

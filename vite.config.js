@@ -26,8 +26,14 @@ const group = (g) => `
       </div>
     </section>`
 
-// Read per request, so tools.yaml edits and `make fetch` show up on refresh.
-const renderGroups = () => parse(readFileSync('tools.yaml', 'utf8')).groups.map(group).join('')
+// Read per request, so tools.yaml edits and `make fetch` show up on refresh. Only installed tools are
+// listed (one whose first build isn't ready yet has nothing to open).
+const renderGroups = () =>
+  parse(readFileSync('tools.yaml', 'utf8'))
+    .groups.map((g) => ({ ...g, tools: g.tools.filter((t) => existsSync(`public/${t.slug}/index.html`)) }))
+    .filter((g) => g.tools.length)
+    .map(group)
+    .join('')
 
 // Vite doesn't serve index.html for public/ folders: /slug -> /slug/ -> /slug/index.html, like a static host would.
 const toolIndex = (req, res, next) => {

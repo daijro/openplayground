@@ -2,6 +2,7 @@
 #
 #   repo:   GitHub repo to download the web build from
 #   tag:    release tag to pin (optional; default: the newest non-prerelease that has a matching asset)
+#   branch: build the newest commit on this branch instead, for repos without web releases (optional)
 #   asset:  regex matching the release asset name (optional; default: "-web-.*\.zip$")
 #   icon:   dashboard icon, also copied in as the tool page's favicon
 #   accent, base: a light and a dark brand color, used for the dashboard hover
@@ -121,3 +122,12 @@ groups:
         icon: icons/autocad.svg
         accent: "#E85984"
         base: "#3A0716"
+
+      - slug: pro-tools
+        name: Pro Tools
+        blurb: Recording, editing and mixing audio.
+        repo: storytold/soundcraft
+        branch: main
+        icon: icons/pro-tools.svg
+        accent: "#A673FF"
+        base: "#1F0B40"

@@ -72,6 +72,7 @@ for (const t of tools) {
       .filter((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`) && /-[0-9a-f]{8}\.zip$/.test(a.name))
       .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
     const asset = ours ?? upstream
+    if (!asset) throw new Error(`${release.tag_name} isn't built yet (build.yml builds it)`)
 
     const stamp = JSON.stringify({ tag: release.tag_name, asset: asset.name, updated_at: asset.updated_at, built: !!ours }) + '\n'
     if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {

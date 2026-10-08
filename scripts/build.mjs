@@ -79,7 +79,14 @@ const prepare = async (slug) => {
   const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, slug) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
   const src = join(work, 'src')
   rmSync(src, { recursive: true, force: true })
-  run('git', ['clone', '--quiet', '--depth', '1', '--branch', release.tag_name, `https://github.com/${t.repo}.git`, src])
+  if (release.ref) {
+    // A commit (tools with `branch:`): fetch exactly that one.
+    run('git', ['init', '--quiet', src])
+    run('git', ['-C', src, 'fetch', '--quiet', '--depth', '1', `https://github.com/${t.repo}.git`, release.ref])
+    run('git', ['-C', src, 'checkout', '--quiet', 'FETCH_HEAD'])
+  } else {
+    run('git', ['clone', '--quiet', '--depth', '1', '--branch', release.tag_name, `https://github.com/${t.repo}.git`, src])
+  }
   if (t.patches) applyPatches(src, t.patches)
   const web = globSync('apps/*-web/Cargo.toml', { cwd: src }).map((f) => join(src, f, '..'))[0] ?? fail(`${t.repo} has no apps/*-web crate`)
   return { t, id: buildId(t, release.tag_name), work, src, web }
