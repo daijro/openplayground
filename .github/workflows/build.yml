@@ -109,7 +109,7 @@ jobs:
           claude_args: >-
             --max-turns 120
             --add-dir ${{ github.workspace }}/../build
-            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Bash(node scripts/build.mjs check ${{ matrix.slug }} release),Bash(node scripts/build.mjs check ${{ matrix.slug }} head)"
+            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Write(patches/${{ matrix.slug }}.yaml),Bash(node scripts/build.mjs check ${{ matrix.slug }} release:*),Bash(node scripts/build.mjs check ${{ matrix.slug }} head:*),Bash(tail:*),Bash(head:*),Bash(grep:*)"
           prompt: |
             The web build of the `${{ matrix.slug }}` app (see tools.yaml) on its `${{ matrix.channel }}` channel
             (release: its newest release; head: the newest commit on its branch) failed in scripts/build.mjs. Its
@@ -135,7 +135,11 @@ jobs:
         if: steps.repair.outcome == 'success'
         continue-on-error: true
         shell: bash
+        env:
+          EXECUTION_FILE: ${{ steps.repair.outputs.execution_file }}
         run: |
+          # Claude's last message and the tool calls it was refused (the action hides its full log).
+          jq -r '.[] | select(.type == "result") | .result, (.permission_denials[]? | "Denied \(.tool_name): \(.tool_input | tostring)")' "$EXECUTION_FILE" || true
           if git diff --quiet "patches/$SLUG.yaml"; then echo "Claude left the patches unchanged."; exit 1; fi
           git diff "patches/$SLUG.yaml"
           node scripts/build.mjs build "$SLUG" "$CHANNEL"
