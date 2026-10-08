@@ -17,6 +17,7 @@ concurrency:
 permissions:
   contents: write
   actions: write
+  issues: write
 
 jobs:
   plan:
@@ -54,6 +55,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
       HAS_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Free disk space for the Rust build
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -145,15 +147,44 @@ jobs:
           gh release view builds --json assets -q '.assets[].name' | grep -E "^$SLUG-.*\.failed$" | xargs -r -n1 gh release delete-asset builds -y
           gh release view builds --json assets -q "[.assets[] | select(.name | startswith(\"$SLUG-\") and endswith(\".zip\"))] | sort_by(.createdAt) | reverse | .[3:] | .[].name" \
             | xargs -r -n1 gh release delete-asset builds -y
+          # Builds again: close its build-failure issue.
+          for n in $(gh issue list --label build-failure --state open --json number,title -q ".[] | select(.title == \"Build failing: $SLUG\") | .number"); do
+            gh issue close "$n" --comment "Builds again: $(basename out/*.zip .zip) in [this run]($RUN_URL)."
+          done
 
       # The site keeps this app's upstream release meanwhile. The marker stops retries for a day, or until
       # the release or the patches change.
+      # An earlier failure still on record (retries come a day apart) means it has failed for over a day:
+      # open an issue for it, once. Publishing a build of the app closes it.
       - name: Record the failure
         if: steps.build.outcome == 'failure' && steps.rebuild.outcome != 'success'
+        env:
+          ID: ${{ steps.build.outputs.id }}
+          REPAIR: ${{ steps.repair.outcome }}
         run: |
           if [ "${{ github.event_name }}" != push ]; then
-            echo "Build failed; see the Build apps run log." > "${{ steps.build.outputs.id }}.failed"
-            gh release upload builds "${{ steps.build.outputs.id }}.failed" --clobber
+            earlier=$(gh release view builds --json assets -q "[.assets[] | select(.name | startswith(\"$SLUG-\") and endswith(\".failed\")) | select(now - (.createdAt | fromdate) > 82800)] | length")
+            echo "Build failed; see the Build apps run log." > "$ID.failed"
+            gh release upload builds "$ID.failed" --clobber
+            open=$(gh issue list --label build-failure --state open --json title -q "[.[] | select(.title == \"Build failing: $SLUG\")] | length")
+            if [ "$earlier" -gt 0 ] && [ "$open" -eq 0 ]; then
+              gh label create build-failure --color D93F0B --description "An app has failed to build for over a day" 2>/dev/null || true
+              case "$REPAIR" in
+                success) repair="Claude tried to repair its patches, but the app still didn't build with them." ;;
+                failure) repair="Claude's patch repair failed to run (see the run log)." ;;
+                *) repair="Claude's patch repair didn't run (no CLAUDE_CODE_OAUTH_TOKEN secret)." ;;
+              esac
+              gh issue create --label build-failure --title "Build failing: $SLUG" --body "$(printf '%s\n' \
+                "The **$SLUG** build has failed for over a day. Meanwhile the site serves the app's upstream release (or, for an app built from a branch, its last good build), so it keeps working." \
+                "" \
+                "- Failing build: \`$ID\`" \
+                "- Latest attempt: [run]($RUN_URL)" \
+                "- $repair" \
+                "" \
+                "Patch problems are repaired automatically, so the likely causes are upstream code that doesn't build at this version, which the next upstream release may fix, or a build recipe that needs updating (\`scripts/build.mjs\`, \`.github/workflows/build.yml\`)." \
+                "" \
+                "The build is retried daily and as soon as a new version or patch lands. This issue closes itself when the app builds again.")"
+            fi
           fi
           exit 1
 
