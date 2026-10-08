@@ -12,7 +12,7 @@
   "after-effects": "v0.4.0+9020f7cf",
   "after-effects@head": "head-fbc4080+9020f7cf",
   "acrobat": "v0.2.1+cc375ec6",
-  "acrobat@head": "head-d2a5912+cc375ec6",
+  "acrobat@head": "head-4dd738b+cc375ec6",
   "word": "v0.1.0+75878e84",
   "word@head": "head-2ed3895+75878e84",
   "excel": "v0.1.0+b5d2b47e",
@@ -21,5 +21,5 @@
   "powerpoint@head": "head-1839f41+e3fdbc2c",
   "autocad": "v0.1.0+cc375ec6",
   "autocad@head": "head-834fc19+cc375ec6",
-  "pro-tools@head": "head-b9c7040+cc375ec6"
+  "pro-tools@head": "head-ef47ab5+cc375ec6"
 }
