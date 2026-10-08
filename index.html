@@ -75,8 +75,8 @@
       content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
       background: var(--base); opacity: 0; transition: opacity 0.35s ease;
     }
-    .tool:is(:hover, :focus-within)::before { opacity: 1; }
-    .tool:is(:hover, :focus-within) { border-color: var(--accent); background: color-mix(in srgb, var(--base) 70%, black); }
+    .tool:is(:hover, :focus-within)::before { opacity: 0.3; }
+    .tool:is(:hover, :focus-within) { border-color: var(--accent); background: color-mix(in srgb, var(--base) 40%, var(--card)); }
     .tool:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
     /* The app's name links the whole card; the repo name is a separate link above it. */
     .open { color: inherit; text-decoration: none; outline: none; }
