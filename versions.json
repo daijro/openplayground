@@ -1,7 +1,8 @@
 {
   "photoshop": "v0.3.0+3c608384",
-  "photoshop@head": "head-d64f809+3c608384",
-  "illustrator": "v0.4.0+79883871",
+  "photoshop@head": "head-5896f0b+3c608384",
+  "illustrator": "v0.4.0+50e42b90",
+  "illustrator@head": "head-5f9d280+50e42b90",
   "indesign": "v0.2.1+1def4b41",
   "indesign@head": "head-f4a4c97+1def4b41",
   "lightroom": "v0.2.1+3c608384",
