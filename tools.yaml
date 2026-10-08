@@ -129,8 +129,9 @@ groups:
         blurb: Recording, editing and mixing audio.
         repo: storytold/soundcraft
         branch: main
-        # The web app, and the workspace it compiles: CI-only or desktop-only commits don't rebuild it.
-        paths: [apps/soundcraft-web, crates, Cargo.toml, Cargo.lock, assets]
+        # The web app and the crates it compiles (dependency changes show up in Cargo.lock): CI, docs and
+        # desktop-only commits don't rebuild it. One GitHub API request per path per check.
+        paths: [apps/soundcraft-web, crates, Cargo.lock]
         icon: icons/pro-tools.svg
         accent: "#A673FF"
         base: "#1F0B40"
