@@ -6,6 +6,9 @@
 #   icon:   dashboard icon, also copied in as the tool page's favicon
 #   accent, base: a light and a dark brand color, used for the dashboard hover
 #   theme:  script that makes the app follow the browser's light/dark preference (optional; see themes/)
+#   patches: source patches for the app's own build (optional; see scripts/build.mjs). Every app is built
+#           from source with a speed-first wasm-opt -O3; when its build is missing or failed, the site
+#           serves the upstream release (with the theme script) instead.
 #
 # Run `make fetch` after editing.
 
@@ -27,6 +30,7 @@ groups:
         repo: storytold/vectorcraft
         icon: icons/illustrator.svg
         theme: themes/illustrator.js
+        patches: patches/illustrator.yaml
         accent: "#FF9A00"
         base: "#330000"
 
@@ -36,6 +40,7 @@ groups:
         repo: storytold/designcraft
         icon: icons/indesign.svg
         theme: themes/indesign.js
+        patches: patches/indesign.yaml
         accent: "#FF3366"
         base: "#49021F"
 
@@ -82,6 +87,7 @@ groups:
         repo: storytold/wordcraft
         icon: icons/word.svg
         theme: themes/word.js
+        patches: patches/word.yaml
         accent: "#41A5EE"
         base: "#0B2557"
 
@@ -91,6 +97,7 @@ groups:
         repo: storytold/gridcraft
         icon: icons/excel.svg
         theme: themes/excel.js
+        patches: patches/excel.yaml
         accent: "#33C481"
         base: "#062E19"
 
@@ -100,5 +107,6 @@ groups:
         repo: storytold/deckcraft
         icon: icons/powerpoint.svg
         theme: themes/powerpoint.js
+        patches: patches/powerpoint.yaml
         accent: "#FF8F6B"
         base: "#3D1308"

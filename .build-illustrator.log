@@ -1,0 +1,274 @@
+$ git clone --quiet --depth 1 --branch v0.4.0 https://github.com/storytold/vectorcraft.git /home/alex/Documents/playground/.build/illustrator/src
+Note: switching to 'a26aa5b203c901979eb447d28e34e7357138c789'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+patched apps/vectorcraft-web/src/web.rs at /let\s+(?:mut\s+)?app(\s*=\s*\w*App::new\()/
+patched apps/vectorcraft-web/src/web.rs at /Ok\(Box::new\(WebShell\b/
+$ trunk build --release --dist /home/alex/Documents/playground/.build/illustrator/dist --public-url ./
+2026-10-08T03:50:51.355311Z  INFO 🚀 Starting trunk 0.21.14
+2026-10-08T03:50:51.355679Z  INFO 📦 starting build
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling libm v0.2.16
+   Compiling cfg-if v1.0.5
+   Compiling autocfg v1.5.1
+   Compiling bitflags v2.13.2
+   Compiling once_cell v1.21.4
+   Compiling log v0.4.34
+   Compiling thiserror v2.0.21
+   Compiling simd-adler32 v0.3.10
+   Compiling crc32fast v1.5.2
+   Compiling adler2 v2.0.1
+   Compiling num-traits v0.2.19
+   Compiling version_check v0.9.5
+   Compiling miniz_oxide v0.9.1
+   Compiling zerocopy v0.8.59
+   Compiling foldhash v0.2.0
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling hashbrown v0.17.1
+   Compiling flate2 v1.1.10
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+   Compiling equivalent v1.0.2
+   Compiling wasm-bindgen-shared v0.2.129
+   Compiling indexmap v2.14.2
+   Compiling zune-core v0.5.3
+   Compiling memchr v2.8.3
+   Compiling zune-jpeg v0.5.15
+   Compiling png v0.18.1
+   Compiling rustversion v1.0.23
+   Compiling quick-error v2.0.1
+   Compiling rustc-hash v2.1.3
+   Compiling weezl v0.1.12
+   Compiling pxfm v0.1.30
+   Compiling bumpalo v3.20.3
+   Compiling color_quant v1.1.0
+   Compiling byteorder-lite v0.1.0
+   Compiling wasm-bindgen v0.2.129
+   Compiling zmij v1.0.23
+   Compiling gif v0.14.2
+   Compiling image-webp v0.2.4
+   Compiling fax v0.2.7
+   Compiling itoa v1.0.18
+   Compiling fearless_simd v0.4.1
+   Compiling futures-task v0.3.34
+   Compiling serde_json v1.0.151
+   Compiling slab v0.4.12
+   Compiling futures-core v0.3.34
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-util v0.3.34
+   Compiling cfg_aliases v0.2.2
+   Compiling euclid v0.22.14
+   Compiling moxcms v0.8.1
+   Compiling zerocopy-derive v0.8.59
+   Compiling wasm-bindgen-macro-support v0.2.129
+   Compiling linebender_resource_handle v0.1.1
+   Compiling guillotiere v0.7.0
+   Compiling slotmap v1.1.1
+   Compiling siphasher v1.0.4
+   Compiling float-cmp v0.9.0
+   Compiling bytemuck_derive v1.12.1
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.21
+   Compiling generic-array v0.14.7
+   Compiling wasmi_ir v2.0.0
+   Compiling parking_lot_core v0.9.12
+   Compiling wasmparser v0.228.0
+   Compiling bytemuck v1.25.2
+   Compiling strict-num v0.1.1
+   Compiling wasmi_core v2.0.0
+   Compiling font-types v0.12.5
+   Compiling font-types v0.11.3
+   Compiling read-fonts v0.41.0
+   Compiling read-fonts v0.39.2
+   Compiling color v0.3.3
+   Compiling read-fonts v0.43.3
+   Compiling read-fonts v0.44.0
+   Compiling scopeguard v1.2.0
+   Compiling typenum v1.20.1
+   Compiling smallvec v1.16.2
+   Compiling arrayvec v0.7.8
+   Compiling half v2.7.1
+   Compiling wasm-bindgen-macro v0.2.129
+   Compiling polycool v0.4.0
+   Compiling arrayref v0.3.9
+   Compiling vectorcraft-text v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/text)
+   Compiling kurbo v0.13.1
+   Compiling tiff v0.11.3
+   Compiling wasmi v2.0.0
+   Compiling js-sys v0.3.106
+   Compiling image v0.25.10
+   Compiling vectorcraft-geom v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/geom)
+   Compiling vectorcraft-color v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/color)
+   Compiling peniko v0.6.1
+   Compiling linesweeper v0.4.0
+   Compiling vectorcraft-doc v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/doc)
+   Compiling skrifa v0.42.1
+   Compiling skrifa v0.44.0
+   Compiling web-sys v0.3.106
+   Compiling write-fonts v0.48.1
+   Compiling vectorcraft-pathops v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/pathops)
+   Compiling skrifa v0.47.0
+   Compiling harfrust v0.13.3
+   Compiling lock_api v0.4.14
+   Compiling subsetter v0.2.6
+   Compiling spin v0.9.9
+   Compiling wasmi_collections v2.0.0
+   Compiling parking_lot v0.12.5
+   Compiling rustc-hash v1.1.0
+   Compiling profiling v1.0.18
+   Compiling naga-types v30.0.1
+   Compiling harfrust v0.12.0
+   Compiling synstructure v0.14.0
+   Compiling naga v30.0.1
+   Compiling raw-window-handle v0.6.2
+   Compiling unicode-width v0.2.2
+   Compiling bit-vec v0.9.1
+   Compiling codespan-reporting v0.13.1
+   Compiling bit-set v0.10.0
+   Compiling vectorcraft-brush v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/brush)
+   Compiling crypto-common v0.1.7
+   Compiling ahash v0.8.12
+   Compiling static_assertions v1.1.0
+   Compiling unicode-general-category v1.1.0
+   Compiling phf_shared v0.13.1
+   Compiling zerofrom-derive v0.1.8
+   Compiling vello_common v0.1.0
+   Compiling wgpu-types v30.0.1
+   Compiling emath v0.36.2
+   Compiling vectorcraft-plugins v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/plugins)
+   Compiling vectorcraft-effects v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/effects)
+   Compiling wgpu-hal v30.0.1
+   Compiling simplecss v0.2.2
+   Compiling xmlwriter v0.1.0
+   Compiling fastrand v2.5.0
+   Compiling data-url v0.3.2
+   Compiling unicode-script v0.5.8
+   Compiling pico-args v0.5.0
+   Compiling base64 v0.22.1
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling phf_generator v0.13.1
+   Compiling ecolor v0.36.2
+   Compiling glow v0.17.0
+   Compiling vello_cpu v0.1.0
+   Compiling zerofrom v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling vello_common v0.2.0
+   Compiling block-buffer v0.10.4
+   Compiling tiny-skia-path v0.12.0
+   Compiling core_maths v0.1.1
+   Compiling uuid v1.26.1
+   Compiling epaint_default_fonts v0.36.2
+   Compiling either v1.18.0
+   Compiling nohash-hasher v0.2.0
+   Compiling hayro-ccitt v0.3.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling self_cell v1.3.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling hayro-jbig2 v0.3.0
+   Compiling yoke v0.8.3
+   Compiling itertools v0.15.0
+   Compiling epaint v0.36.2
+   Compiling glifo v0.3.0
+   Compiling accesskit v0.24.1
+   Compiling ttf-parser v0.25.1
+   Compiling digest v0.10.7
+   Compiling phf_macros v0.13.1
+   Compiling inout v0.1.4
+   Compiling tiny-skia-path v0.11.4
+   Compiling kurbo v0.11.3
+   Compiling hayro-jpeg2000 v0.3.5
+   Compiling wgpu-core v30.0.1
+   Compiling hayro-postscript v0.1.0
+   Compiling memmap2 v0.9.11
+   Compiling unicode-bidi-mirroring v0.4.0
+   Compiling tinyvec v1.13.3
+   Compiling litrs v1.0.0
+   Compiling unicode-properties v0.1.4
+   Compiling unicode-ccc v0.4.0
+   Compiling ryu v1.0.23
+   Compiling bitflags v1.3.2
+   Compiling png v0.17.16
+   Compiling pdf-writer v0.15.0
+   Compiling rustybuzz v0.20.1
+   Compiling document-features v0.2.12
+   Compiling fontdb v0.24.0
+   Compiling hayro-cmap v0.1.0
+   Compiling hayro-syntax v0.7.2
+   Compiling wgpu-core-deps-wasm v30.0.1
+   Compiling svgtypes v0.15.3
+   Compiling phf v0.13.1
+   Compiling cipher v0.4.4
+   Compiling egui v0.36.2
+   Compiling vello_cpu v0.2.0
+   Compiling wasm-bindgen-futures v0.4.79
+   Compiling svgtypes v0.16.1
+   Compiling wgpu v30.0.1
+   Compiling roxmltree v0.21.1
+   Compiling imagesize v0.13.0
+   Compiling xmp-writer v0.3.3
+   Compiling roxmltree v0.20.0
+   Compiling imagesize v0.14.0
+   Compiling unicode-bidi v0.3.18
+   Compiling base64 v0.23.1
+   Compiling unicode-vo v0.1.0
+   Compiling imagesize v0.15.0
+   Compiling jpeg-encoder v0.6.1
+   Compiling krilla v0.8.2
+   Compiling usvg v0.48.1
+   Compiling vectorcraft-render v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/render)
+   Compiling usvg v0.45.1
+   Compiling hayro-interpret v0.7.0
+   Compiling tiny-skia v0.11.4
+   Compiling aes v0.8.4
+   Compiling md-5 v0.10.6
+   Compiling sha2 v0.10.9
+   Compiling rgb v0.8.53
+   Compiling enum-map-derive v0.17.0
+   Compiling resvg v0.45.1
+   Compiling enum-map v2.7.3
+   Compiling vectorcraft-pdf v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/pdf)
+   Compiling vectorcraft-svg v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/svg)
+   Compiling vectorcraft-eps v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/eps)
+   Compiling vectorcraft-metafile v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/metafile)
+   Compiling vectorcraft-cad v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/cad)
+   Compiling vectorcraft-tools v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/tools)
+   Compiling vectorcraft-format v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/format)
+   Compiling vectorcraft-trace v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/trace)
+   Compiling web-time v1.1.0
+   Compiling type-map v0.5.1
+   Compiling rfd v0.17.2
+   Compiling vectorcraft-engine v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/engine)
+   Compiling egui_extras v0.36.2
+   Compiling percent-encoding v2.3.2
+   Compiling egui-wgpu v0.36.2
+   Compiling eframe v0.36.2
+   Compiling vectorcraft-ui-egui v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/crates/ui-egui)
+   Compiling vectorcraft-web v0.4.0 (/home/alex/Documents/playground/.build/illustrator/src/apps/vectorcraft-web)
+    Finished `release` profile [optimized] target(s) in 4m 35s
+2026-10-08T03:55:34.805016Z  INFO applying new distribution
+2026-10-08T03:55:34.805256Z  INFO ✅ success
+$ /tmp/claude-1000/-home-alex-Documents-playground/982439e5-a8d2-4053-ac57-aa2fc823ed40/scratchpad/tools/binaryen-version_133/bin/wasm-opt -O3 --strip-debug /home/alex/Documents/playground/.build/illustrator/dist/vectorcraft-web-7640a5c29228d35f_bg.wasm -o /home/alex/Documents/playground/.build/illustrator/dist/vectorcraft-web-7640a5c29228d35f_bg.wasm
+$ zip -qr9 /home/alex/Documents/playground/out/illustrator-v0.4.0-fd6e942a.zip illustrator-v0.4.0-fd6e942a
+built out/illustrator-v0.4.0-fd6e942a.zip

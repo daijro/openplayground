@@ -1,0 +1,92 @@
+name: Build apps
+
+# Builds each app from source (scripts/build.mjs: its patches and wasm-opt -O3) whenever its upstream
+# release, its patches or the build recipe change, one parallel job per app, and publishes the zips to
+# the `builds` release. fetch.yml then installs them; a failed build leaves that app on its upstream release.
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [tools.yaml, patches/**, scripts/build.mjs, scripts/releases.mjs, .github/workflows/build.yml]
+
+concurrency:
+  group: build
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      slugs: ${{ steps.plan.outputs.slugs }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - id: plan
+        run: node scripts/build.mjs plan >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Create the builds release
+        run: gh release view builds >/dev/null 2>&1 || gh release create builds --title "App builds" --latest=false --notes "Patched, optimized web builds made by the Build apps workflow (scripts/build.mjs). The site installs them from here."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.slugs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: ${{ fromJSON(needs.plan.outputs.slugs) }}
+    steps:
+      - name: Free disk space for the Rust build
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install trunk and binaryen
+        run: |
+          mkdir -p ~/tools/bin
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/tools/bin
+          url=$(gh api repos/WebAssembly/binaryen/releases/latest -q '.assets[] | select(.name | endswith("x86_64-linux.tar.gz")) | .browser_download_url')
+          curl -sSfL "$url" | tar -xz -C ~/tools
+          echo "$HOME/tools/bin" >> "$GITHUB_PATH"
+          echo "WASM_OPT=$(ls ~/tools/binaryen-*/bin/wasm-opt)" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: node scripts/build.mjs build ${{ matrix.slug }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Publish, keeping this app's 3 newest builds
+        run: |
+          gh release upload builds out/*.zip --clobber
+          gh release view builds --json assets -q '[.assets[] | select(.name | startswith("${{ matrix.slug }}-"))] | sort_by(.createdAt) | reverse | .[3:] | .[].name' \
+            | xargs -r -n1 gh release delete-asset builds -y
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Install whatever got built now, rather than at fetch.yml's next scheduled run.
+  deploy:
+    needs: build
+    if: always() && needs.build.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run fetch.yml -R ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}

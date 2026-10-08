@@ -1,14 +1,13 @@
-// Downloads each tool's web build (see tools.yaml) into public/<slug>/.
+// Downloads each tool's web build (see tools.yaml) into public/<slug>/: our build of its newest release
+// (scripts/build.mjs) when there is one, else the upstream release.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { parse } from 'yaml'
+import { builtAssets, tools, upstreamRelease } from './releases.mjs'
 
-const tools = parse(readFileSync('tools.yaml', 'utf8')).groups.flatMap((g) => g.tools)
-const headers = process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}
 // Cargo build leftovers and precompressed copies some archives ship with; _headers/.htaccess only work at the site root.
 const JUNK = /^(build|deps|incremental|examples|\.fingerprint|\.cargo-.*|_headers|\.htaccess|.*\.(gz|br))$/
 const MAX_FILE = 25 * 1024 * 1024 // the host's per-file limit
@@ -26,11 +25,12 @@ const patch = (t, dir) => {
     if (f.endsWith('.wasm.gz')) wasm[basename(f, '.gz')] = readFileSync(join(dir, f)).readUInt32LE(statSync(join(dir, f)).size - 4)
   }
   // The injected script: the prelude, then the tool's theme script (tools.yaml `theme:`), sharing `tool`.
-  const { tag } = JSON.parse(readFileSync(join(dir, '.release'), 'utf8'))
+  // Our builds of patched tools set the theme in the app itself, so they skip it.
+  const { tag, built } = JSON.parse(readFileSync(join(dir, '.release'), 'utf8'))
   const script = [
     `const tool = ${JSON.stringify({ name: t.name, accent: t.accent, tag, wasm })}\n`,
     prelude,
-    t.theme && readFileSync(t.theme, 'utf8'),
+    t.theme && !(built && t.patches) && readFileSync(t.theme, 'utf8'),
   ].filter(Boolean).join('\n')
   const page = join(dir, 'index.html')
   const html = readFileSync(page, 'utf8')
@@ -54,21 +54,18 @@ const patch = (t, dir) => {
   }
 }
 
+const built = await builtAssets()
 for (const t of tools) {
   try {
     const dir = join('public', t.slug)
-    const pattern = new RegExp(t.asset ?? '-web-.*\\.zip$')
-    const res = await fetch(`https://api.github.com/repos/${t.repo}/releases?per_page=100`, { headers })
-    if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`)
-    // Newest release (or the pinned tag) that actually has a web build.
-    const release = (await res.json())
-      .filter((r) => (t.tag ? r.tag_name === t.tag : !r.draft && !r.prerelease))
-      .sort((a, b) => b.published_at.localeCompare(a.published_at))
-      .find((r) => r.assets.some((a) => pattern.test(a.name)))
-    if (!release) throw new Error(`no ${t.tag ? `release ${t.tag}` : 'release'} has an asset matching ${pattern}`)
-    const asset = release.assets.find((a) => pattern.test(a.name))
+    const { release, asset: upstream } = await upstreamRelease(t)
+    // Our build of this release (<slug>-<tag>-<hash>.zip), the newest if there are several.
+    const ours = built
+      .filter((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`) && /-[0-9a-f]{8}\.zip$/.test(a.name))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+    const asset = ours ?? upstream
 
-    const stamp = JSON.stringify({ tag: release.tag_name, asset: asset.name, updated_at: asset.updated_at }) + '\n'
+    const stamp = JSON.stringify({ tag: release.tag_name, asset: asset.name, updated_at: asset.updated_at, built: !!ours }) + '\n'
     if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
       console.log(`${t.slug}: ${asset.name} already installed`)
       patch(t, dir)
@@ -118,11 +115,13 @@ for (const t of tools) {
   }
 }
 
-// The installed release of each tool. The scheduled workflow commits this when it changes, and that push
-// is what makes Cloudflare rebuild and redeploy the site.
+// The installed release of each tool, with +<hash> for our builds. The scheduled workflow commits this when
+// it changes, and that push is what makes Cloudflare rebuild and redeploy the site.
 const versions = {}
 for (const t of tools) {
   const stamp = join('public', t.slug, '.release')
-  if (existsSync(stamp)) versions[t.slug] = JSON.parse(readFileSync(stamp, 'utf8')).tag
+  if (!existsSync(stamp)) continue
+  const { tag, asset, built } = JSON.parse(readFileSync(stamp, 'utf8'))
+  versions[t.slug] = built ? `${tag}+${asset.match(/-([0-9a-f]{8})\.zip$/)[1]}` : tag
 }
 writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n')
