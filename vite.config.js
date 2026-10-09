@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import { defineConfig } from 'vite'
 import { parse } from 'yaml'
@@ -46,6 +46,27 @@ const renderGroups = () =>
     .map(group)
     .join('')
 
+// /shell/apps.json: what the shell's app switcher and file explorer list, from tools.yaml and the installed
+// builds (the same stamps the dashboard reads). An app's icon is its install's site-icon (fetch.mjs copies it).
+const appsJson = () => ({
+  groups: parse(readFileSync('tools.yaml', 'utf8'))
+    .groups.map((g) => ({
+      name: g.name,
+      apps: g.tools.flatMap((t) => {
+        const release = installed(t, 'release')
+        const head = installed(t, 'head')
+        if (!release && !head) return []
+        const channel = (s) => s && { path: s.path, label: s.label, date: s.date ?? null }
+        return [{
+          slug: t.slug, name: t.name, blurb: t.blurb, accent: t.accent, opens: t.opens ?? [],
+          icon: `${(release ?? head).path}site-icon${extname(t.icon)}`,
+          release: channel(release) ?? null, head: channel(head) ?? null,
+        }]
+      }),
+    }))
+    .filter((g) => g.apps.length),
+})
+
 // Vite doesn't serve index.html for public/ folders: /slug -> /slug/ -> /slug/index.html, like a static host would.
 const toolIndex = (req, res, next) => {
   const [path, query = ''] = req.url.split(/(?=\?)/)
@@ -62,8 +83,12 @@ const shell = (req, res, next) => {
   const path = req.url.split('?')[0]
   if (!path.startsWith('/shell/')) return next()
   const name = path.slice('/shell/'.length)
+  if (name === 'apps.json') {
+    res.writeHead(200, { 'content-type': TYPES['.json'], 'cache-control': 'no-cache' })
+    return res.end(JSON.stringify(appsJson()))
+  }
   const file = join('shell', name)
-  if (name.includes('..') || !existsSync(file)) return next()
+  if (name.includes('..') || !statSync(file, { throwIfNoEntry: false })?.isFile()) return next()
   res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' })
   res.end(readFileSync(file))
 }
@@ -79,6 +104,15 @@ export default defineConfig({
         server.middlewares.use(toolIndex)
       },
       configurePreviewServer: (server) => void server.middlewares.use(toolIndex),
+    },
+    {
+      // The built site serves the shell as plain files, like the dev middleware above.
+      name: 'shell',
+      apply: 'build',
+      closeBundle() {
+        cpSync('shell', 'dist/shell', { recursive: true })
+        writeFileSync('dist/shell/apps.json', JSON.stringify(appsJson()))
+      },
     },
   ],
 })
