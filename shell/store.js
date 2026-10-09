@@ -110,7 +110,15 @@ export const mkdir = async (path) => {
   changed(parentOf(path))
 }
 
+// Waits for every queued write at or under `path`, so a save followed by a rename/delete acts on the saved file.
+const settle = async (path) => {
+  path = normalize(path)
+  const under = path === '/' ? '/' : `${path}/`
+  await Promise.all([...queues].filter(([key]) => key === path || key.startsWith(under)).map(([, task]) => task.catch(() => {})))
+}
+
 export const remove = async (path) => {
+  await settle(path)
   await (await folder(parentOf(path))).removeEntry(baseName(path), { recursive: true })
   changed(parentOf(path))
 }
@@ -129,8 +137,14 @@ export const move = async (from, to) => {
   to = normalize(to)
   if (from === to) return
   if (to.startsWith(`${from}/`)) throw new Error(`${baseName(from)} can't move into itself`)
+  await Promise.all([settle(from), settle(to)])
   if (await stat(to)) throw new Error(`${baseName(to)} already exists there`)
-  await copy(from, to)
+  try {
+    await copy(from, to)
+  } catch (e) {
+    await remove(to).catch(() => {}) // don't leave a half-copied destination behind
+    throw e
+  }
   await remove(from)
 }
 

@@ -114,3 +114,17 @@ test('onChange reports changes in this tab and in other tabs', async () => {
   assert.ok(seen.includes('/Shared'))
   await context.close()
 })
+
+test('move and remove wait for writes still queued under the path', async () => {
+  const result = await run(async (store) => {
+    store.write('/m/a.txt', new Uint8Array([7]))
+    await store.move('/m', '/n')
+    store.write('/r.txt', new Uint8Array([8]))
+    await store.remove('/r.txt')
+    await new Promise((r) => setTimeout(r, 300))
+    return { src: await store.stat('/m'), moved: [...(await store.read('/n/a.txt'))], removed: await store.stat('/r.txt') }
+  })
+  assert.equal(result.src, null)
+  assert.deepEqual(result.moved, [7])
+  assert.equal(result.removed, null)
+})
