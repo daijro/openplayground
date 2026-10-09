@@ -9,8 +9,8 @@
 //   request()              ask for them, from a font menu opening: the browser's prompt needs the click that
 //                          opened it (it counts for ~5 s). Asks once per page; a no-op when unsupported, already
 //                          granted or denied, or without a recent click
-//   load(postscriptName)   → Promise<Uint8Array>, the font file's bytes (kept: asking again, or twice at once,
-//                          reads it once)
+//   load(postscriptName)   → Promise<Uint8Array>, the font file's bytes (asking twice at once reads it once; not
+//                          kept after, as the app keeps its own copy and some fonts are tens of MB)
 //   supported()            the browser has the API
 //   granted()              the fonts are available to this page
 import { toast } from './ui.js'
@@ -71,8 +71,8 @@ function load(postscriptName) {
     const bytes = font
       ? font.blob().then((b) => b.arrayBuffer()).then((b) => new Uint8Array(b))
       : Promise.reject(new Error(`playgroundFonts: no font ${postscriptName}`))
-    bytes.catch(() => loads.delete(postscriptName))
     loads.set(postscriptName, bytes)
+    bytes.finally(() => loads.delete(postscriptName)).catch(() => {})
   }
   return loads.get(postscriptName)
 }

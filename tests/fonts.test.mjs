@@ -29,7 +29,7 @@ async function fontsPage({ grant = false, init } = {}) {
   return page
 }
 
-test('allowed on an earlier visit: onList gets the fonts at startup, unasked, and load reads their files once', async () => {
+test('allowed on an earlier visit: onList gets the fonts at startup, unasked, and load reads their files', async () => {
   const page = await fontsPage({ grant: true })
   const fonts = await page.evaluate(() => new Promise((resolve) => playgroundFonts.onList(resolve)))
   assert.ok(fonts.length > 0, 'this machine has fontconfig fonts')
@@ -38,9 +38,9 @@ test('allowed on an earlier visit: onList gets the fonts at startup, unasked, an
   const read = await page.evaluate(async (name) => {
     const [a, b] = [playgroundFonts.load(name), playgroundFonts.load(name)]
     const bytes = await a
-    return { same: a === b, again: (await playgroundFonts.load(name)) === bytes, size: bytes.length, head: [...bytes.slice(0, 4)] }
+    return { same: a === b, again: (await playgroundFonts.load(name)).length === bytes.length, size: bytes.length, head: [...bytes.slice(0, 4)] }
   }, font.postscriptName)
-  assert.ok(read.same && read.again, 'one read per font')
+  assert.ok(read.same && read.again, 'one read for requests at once; a later one reads it again')
   assert.ok(read.size > 1000)
   assert.ok([[0, 1, 0, 0], [0x4f, 0x54, 0x54, 0x4f], [0x74, 0x74, 0x63, 0x66]].some((h) => h.join() === read.head.join()), 'a TrueType/OpenType file or collection')
   assert.equal(await page.evaluate(() => playgroundFonts.supported() && playgroundFonts.granted()), true)
