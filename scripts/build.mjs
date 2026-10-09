@@ -15,12 +15,20 @@
 //   - file: apps/*-web/src/**/*.rs
 //     find: 'let\s+mut\s+app\s*=\s*\w+::new\([^;]*\);'
 //     after: "\n    app.dark = true;"           # or `before:`, or `replace:` (with $1, $& like String.replace)
+//
+// Changes too big for rules, like an upstream pull request that isn't merged yet, are diffs in the folder
+// next to the patch file: patches/<slug>/<name>.diff, or <name>.<channel>.diff to use on that channel
+// instead. They apply before the rules, with `git apply --recount` (so hunk line counts needn't be exact),
+// and must apply, or the build fails. One upstream already has (it applies in reverse) is skipped; once the
+// newest release has it, `build` lists its files in out/<slug>.merged and build.yml deletes them. An empty
+// diff is skipped too (build.yml deletes it when committing a repair).
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
+import { applyDiffs, diffDir } from './diffs.mjs'
 import { CHANNELS, JUNK, builtAssets, channelAssets, resolveVersion, tools } from './releases.mjs'
 
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
@@ -38,7 +46,9 @@ const SIMD = '[target.wasm32-unknown-unknown]\nrustflags = ["-Ctarget-feature=+s
 const buildHash = (t) =>
   createHash('sha256')
     .update(readFileSync(import.meta.filename))
+    .update(readFileSync(new URL('diffs.mjs', import.meta.url)))
     .update(t.patches ? readFileSync(t.patches) : '')
+    .update(diffDir(t) ? readdirSync(diffDir(t)).sort().map((f) => f + readFileSync(join(diffDir(t), f), 'utf8')).join('') : '')
     .digest('hex')
     .slice(0, 8)
 export const buildId = (t, tag) => `${t.slug}-${tag}-${buildHash(t)}`
@@ -99,9 +109,10 @@ const prepare = async (slug, channel, { dir = 'src', patch = true } = {}) => {
   } else {
     run('git', ['clone', '--quiet', '--depth', '1', '--branch', release.tag_name, `https://github.com/${t.repo}.git`, src])
   }
+  const merged = patch ? applyDiffs(src, t, channel) : []
   if (t.patches && patch) applyPatches(src, t.patches)
   const web = globSync('apps/*-web/Cargo.toml', { cwd: src }).map((f) => join(src, f, '..'))[0] ?? fail(`${t.repo} has no apps/*-web crate`)
-  return { t, id: buildId(t, release.tag_name), work, src, web }
+  return { t, id: buildId(t, release.tag_name), work, src, web, merged }
 }
 
 const check = async (slug, channel) => {
@@ -112,7 +123,12 @@ const check = async (slug, channel) => {
 }
 
 const build = async (slug, channel) => {
-  const { id, work, src, web } = await prepare(slug, channel)
+  const { id, work, src, web, merged } = await prepare(slug, channel)
+  // The newest release has them, so the newest commit does too: they've done their job (build.yml deletes them).
+  if (channel === 'release' && merged.length) {
+    mkdirSync('out', { recursive: true })
+    writeFileSync(join('out', `${slug}.merged`), merged.join('\n') + '\n')
+  }
   const dist = join(work, 'dist')
   rmSync(dist, { recursive: true, force: true })
   if (existsSync(join(web, 'Trunk.toml'))) {

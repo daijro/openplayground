@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [tools.yaml, patches/**, scripts/build.mjs, scripts/releases.mjs, .github/workflows/build.yml]
+    paths: [tools.yaml, patches/**, scripts/build.mjs, scripts/diffs.mjs, scripts/releases.mjs, .github/workflows/build.yml]
 
 concurrency:
   group: build
@@ -114,7 +114,7 @@ jobs:
           claude_args: >-
             --max-turns 120
             --add-dir ${{ github.workspace }}/../build
-            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Write(patches/${{ matrix.slug }}.yaml),Bash(node scripts/build.mjs check ${{ matrix.slug }} release:*),Bash(node scripts/build.mjs check ${{ matrix.slug }} head:*),Bash(tail:*),Bash(head:*),Bash(grep:*)"
+            --allowedTools "Read,Glob,Grep,Edit(patches/${{ matrix.slug }}.yaml),Write(patches/${{ matrix.slug }}.yaml),Edit(patches/${{ matrix.slug }}/**),Write(patches/${{ matrix.slug }}/**),Bash(node scripts/build.mjs check ${{ matrix.slug }} release:*),Bash(node scripts/build.mjs check ${{ matrix.slug }} head:*),Bash(tail:*),Bash(head:*),Bash(grep:*)"
           prompt: |
             The web build of the `${{ matrix.slug }}` app (see tools.yaml) on its `${{ matrix.channel }}` channel
             (release: its newest release; head: the newest commit on its branch) failed in scripts/build.mjs. Its
@@ -132,13 +132,23 @@ jobs:
             Prefer anchors that survive future releases: the app's command names and type names rather than
             formatting or argument lists.
 
-            Look at code with the Read, Grep and Glob tools; change the patch file with Edit or Write. The only
+            The app may also have diffs in patches/${{ matrix.slug }}/ (scripts/build.mjs explains them; their
+            header says what each is for). They apply first, and a diff that no longer applies fails the build
+            ("no longer applies"). Most are pull requests sent upstream and not merged yet, applied here until
+            they are. Re-fit such a diff to the channel's upstream code without changing what it does: its
+            context and removed lines must match that code exactly (hunk line counts needn't). When the two
+            channels need different versions, write `<name>.<channel>.diff` next to `<name>.diff`. If upstream
+            has merged the pull request, or now does the same thing natively in that channel's code, write the
+            diff (that channel's file) empty instead: an empty diff is skipped and deleted.
+
+            Look at code with the Read, Grep and Glob tools; change the patches with Edit or Write. The only
             shell commands you can run are these two, as written or followed by `2>&1 | tail -n 60`:
             `node scripts/build.mjs check ${{ matrix.slug }} release` and
             `node scripts/build.mjs check ${{ matrix.slug }} head`. Each re-clones and re-applies the patches,
             then compiles (a channel without a version is skipped). Repeat until both pass. Only edit
-            patches/${{ matrix.slug }}.yaml. If the failure has nothing to do with the patches (a network error,
-            or upstream code that doesn't build at all), change nothing and say so.
+            patches/${{ matrix.slug }}.yaml and the files in patches/${{ matrix.slug }}/. If the failure has
+            nothing to do with the patches (a network error, or upstream code that doesn't build at all), change
+            nothing and say so.
 
       - id: rebuild
         name: Rebuild with the repaired patches
@@ -150,8 +160,9 @@ jobs:
         run: |
           # Claude's last message and the tool calls it was refused (the action hides its full log).
           jq -r '.[] | select(.type == "result") | .result, (.permission_denials[]? | "Denied \(.tool_name): \(.tool_input | tostring)")' "$EXECUTION_FILE" || true
-          if git diff --quiet "patches/$SLUG.yaml"; then echo "Claude left the patches unchanged."; exit 1; fi
-          git diff "patches/$SLUG.yaml"
+          if [ -z "$(git status --porcelain -- "patches/$SLUG.yaml" "patches/$SLUG")" ]; then echo "Claude left the patches unchanged."; exit 1; fi
+          git add -N "patches/$SLUG" 2>/dev/null || true
+          git diff -- "patches/$SLUG.yaml" "patches/$SLUG"
           node scripts/build.mjs build "$SLUG" "$CHANNEL"
           node scripts/build.mjs check "$SLUG" "$([ "$CHANNEL" = head ] && echo release || echo head)"
 
@@ -160,7 +171,10 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -q "patches/$SLUG.yaml" -m "Repair $SLUG patches for ${{ steps.build.outputs.id }}" \
+          # A diff Claude emptied is one upstream has now: delete it.
+          [ -d "patches/$SLUG" ] && find "patches/$SLUG" -name '*.diff' -empty -delete
+          git add -A patches
+          git commit -q -m "Repair $SLUG patches for ${{ steps.build.outputs.id }}" \
             -m "The $CHANNEL build failed with the old rules. Claude rewrote them in the Build apps workflow; the app rebuilt with the new ones, and its other channel still compiles."
           git pull -q --rebase && git push -q
 
@@ -175,6 +189,16 @@ jobs:
           for n in $(gh issue list --label build-failure --state open --json number,title -q ".[] | select(.title == \"$TITLE\") | .number"); do
             gh issue close "$n" --comment "Builds again: $(basename out/*.zip .zip) in [this run]($RUN_URL)."
           done
+
+      # A diff (patches/<slug>/) the newest release already has, so both channels do: build.mjs listed its files.
+      - name: Delete diffs upstream has merged
+        if: (steps.build.outcome == 'success' || steps.rebuild.outcome == 'success') && hashFiles(format('out/{0}.merged', matrix.slug)) != ''
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          xargs git rm -q --ignore-unmatch < "out/$SLUG.merged"
+          git commit -q -m "Delete $SLUG diffs upstream has merged" -m "Its newest release, ${{ steps.build.outputs.id }}, already has them:" -m "$(cat "out/$SLUG.merged")"
+          git pull -q --rebase && git push -q
 
       # The site keeps this channel's upstream release or last good build meanwhile. The marker stops retries
       # for a day, or until the version or the patches change. A failure while an earlier one is still on
