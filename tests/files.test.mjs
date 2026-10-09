@@ -177,3 +177,27 @@ test('an explorer in another tab refreshes when this tab saves', async () => {
   await a.evaluate(() => playgroundFiles.write('browser:/fromA.txt', new Uint8Array([1])))
   await b.getByRole('option', { name: /^fromA\.txt/ }).waitFor({ timeout: 5000 })
 })
+
+test('?open= waits for the app to size its canvas and drop its loader before dropping the file', async () => {
+  const first = await shellPage()
+  await first.evaluate(() => playgroundFiles.write('browser:/x.txt', new Uint8Array([7])))
+  await until(() => stat(first, '/x.txt'), 5000, 'the write')
+  const page = await openPage(browser, `${site.url}/files/?open=${encodeURIComponent('browser:/x.txt')}`, { context: first.context() })
+  await page.evaluate(() => {
+    const canvas = document.createElement('canvas') // a fake app: 300x150 canvas plus a loader
+    const loader = Object.assign(document.createElement('div'), { id: 'loading' })
+    document.body.prepend(canvas, loader)
+    window.dropped = []
+    canvas.addEventListener('drop', (e) => window.dropped.push(e.dataTransfer.files[0].name))
+    window.fake = { canvas, loader }
+  })
+  await page.evaluate(() => import('/shell/files.js'))
+  await new Promise((r) => setTimeout(r, 2500))
+  assert.deepEqual(await page.evaluate(() => window.dropped), [])
+  await page.evaluate(() => {
+    window.fake.loader.remove()
+    window.fake.canvas.width = 800
+  })
+  await until(() => page.evaluate(() => window.dropped.length), 6000, 'the drop')
+  assert.deepEqual(await page.evaluate(() => window.dropped), ['x.txt'])
+})

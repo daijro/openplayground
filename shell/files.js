@@ -130,7 +130,9 @@ if (startupPath) {
   const begun = Date.now()
   const wait = () => {
     if (startupDone) return
-    const loaded = document.querySelector('canvas') && !document.querySelector('[id$="_loading"]')
+    // Started = eframe has sized the canvas (HTML default is 300x150) and the loader is gone.
+    const canvas = document.querySelector('body > canvas')
+    const loaded = canvas && (canvas.width !== 300 || canvas.height !== 150) && !document.querySelector('#loading, [id$="_loading"]')
     if (loaded || Date.now() - begun > 120_000) setTimeout(startup, 1500)
     else setTimeout(wait, 250)
   }
