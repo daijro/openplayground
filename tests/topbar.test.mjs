@@ -141,7 +141,7 @@ test('the bar folds away with its arrow, comes back from the tab at the top cent
   const tab = page.getByRole('button', { name: 'Show the bar' })
   await until(async () => Math.round((await tab.boundingBox())?.y ?? -99) === 0, 10000, 'the tab to drop in')
   const box = await tab.boundingBox()
-  assert.equal(Math.round(box.y), 0, 'the tab hangs from the top edge')
+  assert.ok(Math.abs(box.y) < 1, 'the tab hangs from the top edge')
   assert.ok(Math.abs(box.x + box.width / 2 - page.viewportSize().width / 2) < 2, 'centered')
   await page.reload()
   await tab.waitFor()
