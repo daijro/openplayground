@@ -10,3 +10,337 @@
         session.prefs.ui_brightness = if dark { "dark" } else { "light" }.into();
         session
     }
+
+
+# ══ The fonts installed on this computer ═════════════════════════════════════════════════════════════════
+# Rules 1–11 give VectorCraft's browser build the user's installed fonts. The site's shell (shell/fonts.js in
+# github.com/daijro/openplayground) gives every app page `globalThis.playgroundFonts`:
+#   onList(callback) → [{family, style, fullName, postscriptName}]    load(postscriptName) → Promise<bytes>
+#   request()        ask the browser (its one-time "local-fonts" prompt; needs the click that opened a menu)
+# Chromium-based browsers only (the Local Font Access API); elsewhere onList never fires and nothing changes.
+# What the user gets in Illustrator:
+#   - The first time a font menu opens, the browser asks to "use your fonts"; allowed (now or on an earlier
+#     visit), every installed family is listed in the font menus, with its styles, as on the desktop.
+#   - A font's file is read when something first uses it (the menu's sample, type set in it, a document that
+#     names it); its text shows in the stand-in (Source Sans 3) until then, a moment, and redraws in it.
+#   - Documents naming installed fonts find them, by family (SVG) or PostScript name (as PDF, EPS and .ai do).
+# If VectorCraft's browser build gains its own installed fonts, delete these rules (rule 5's bridge last).
+
+# Rule 1/11: the browser's fonts in the font database, as the native build catalogs the installed ones.
+# What it's for: the font menus list every family the browser lists, and type set in one finds it.
+# How: add_web_fonts() files each {family, style, PostScript name} in the catalog (the native scan's, empty on
+#   the web), with the PostScript name where the native catalog keeps the file's path, plus the PostScript name
+#   maps, and bumps the generation (menus rebuild). No font data is read. load_web() (rule 2) starts loading a
+#   face through WEB_FONTS.load; the bytes come back through add_font, which bumps the generation again.
+#   use_web_fonts() sets the hooks (rule 5); request_web_fonts() is for the font menus (rule 6).
+# Verify: with the fonts allowed, select text: Properties › Character's font menu lists e.g. DejaVu Serif, and
+#   its styles.
+# If upstream changes: keep add_web_fonts filling whatever the native scan fills (catalog, PostScript names,
+#   aliases); drop it once the web build lists installed fonts itself.
+- file: crates/text/src/fontdb.rs
+  find: '^impl FontDb \{\n'
+  before: |
+    /// playground (patches/illustrator.yaml): the browser's fonts: `load` (a face's file, by PostScript name)
+    /// and `request` (the list), set by the web crate's bridge ([`FontDb::use_web_fonts`]).
+    #[cfg(target_arch = "wasm32")]
+    static WEB_FONTS: std::sync::OnceLock<(fn(&str), fn())> = std::sync::OnceLock::new();
+
+  after: |2
+        /// playground: read the fonts installed on the user's computer through the browser: `load(PostScript
+        /// name)` starts reading a face's file, whose bytes come back through [`FontDb::add_font`]; `request()`
+        /// asks for the list. False when they were set already.
+        #[cfg(target_arch = "wasm32")]
+        pub fn use_web_fonts(&self, load: fn(&str), request: fn()) -> bool {
+            WEB_FONTS.set((load, request)).is_ok()
+        }
+
+        /// playground: a font menu opened: ask the browser for the installed fonts (its prompt, once).
+        #[cfg(target_arch = "wasm32")]
+        pub fn request_web_fonts(&self) {
+            if let Some((_, request)) = WEB_FONTS.get() {
+                request();
+            }
+        }
+
+        /// playground: catalog the fonts the browser lists, (family, style, PostScript name) each, as the native
+        /// scan catalogs the installed ones: listed, found by PostScript name, loaded when first used.
+        #[cfg(target_arch = "wasm32")]
+        pub fn add_web_fonts(&self, fonts: &[(String, String, String)]) {
+            {
+                let mut catalog = self.catalog.write().unwrap_or_else(|e| e.into_inner());
+                let mut postscript = self.postscript.write().unwrap_or_else(|e| e.into_inner());
+                let mut aliases = self.aliases.write().unwrap_or_else(|e| e.into_inner());
+                for (family, style, ps) in fonts {
+                    postscript.insert(norm(ps), (family.clone(), style.clone()));
+                    aliases.entry(norm(ps)).or_default().push(Alias { family: family.clone(), style: Some(style.clone()), paired: None });
+                    let entry = catalog.entry(family.to_ascii_lowercase()).or_default();
+                    if entry.name.is_empty() {
+                        entry.name = family.clone();
+                    }
+                    if !entry.faces.iter().any(|f| f.style.eq_ignore_ascii_case(style)) {
+                        let (weight, italic) = (style_weight(style), style_italic(style));
+                        entry.faces.push(CatalogFace { style: style.clone(), path: PathBuf::from(ps), weight, italic });
+                    }
+                }
+            }
+            self.changed();
+        }
+
+        /// playground: start loading the browser's font for `family` / `style`: that style, else (`any_style`)
+        /// the family's closest. Whoever asked gets a stand-in meanwhile.
+        #[cfg(target_arch = "wasm32")]
+        fn load_web(&self, family: &str, style: &str, any_style: bool) {
+            let Some((load, _)) = WEB_FONTS.get() else { return };
+            let name = {
+                let catalog = self.read_catalog();
+                let Some(c) = catalog.get(&family.to_ascii_lowercase()) else { return };
+                let (ns, tw, ti) = (norm(style), style_weight(style), style_italic(style));
+                let off = |f: &&CatalogFace| (f.weight - tw).abs() + if f.italic != ti { 1000.0 } else { 0.0 };
+                let exact = c.faces.iter().find(|f| norm(&f.style) == ns);
+                let Some(f) = exact.or_else(|| c.faces.iter().filter(|_| any_style).min_by(|a, b| off(a).total_cmp(&off(b)))) else { return };
+                f.path.to_string_lossy().into_owned()
+            };
+            load(&name);
+        }
+
+
+# Rule 2/11: a browser font loads when something first uses it.
+# What it's for: type set in an installed family, a document naming one, and the font menu's samples get the
+#   real font, read from the computer only when needed (there are often thousands of faces).
+# How: where the native build loads an installed family's files (FontDb::face, which every layout and sample
+#   goes through), the web build calls load_web (rule 1); the face stands in as upstream (the family's closest
+#   loaded style, else Source Sans 3). The bridge (rule 5) reads each face once and redraws when it arrives.
+# Verify: type text, pick an installed family: it shows in Source Sans 3 for a moment, then in that family.
+# If upstream changes: anchor on face()'s native lazy-load branch.
+- file: crates/text/src/fontdb.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\s*if found\.is_none\(\) \|\| self\.is_cataloged\(family, style\)'
+  replace: |-
+    // playground (patches/illustrator.yaml): a browser font, read in the background.
+            #[cfg(target_arch = "wasm32")]
+            self.load_web(family, style, found.is_none());
+            $&
+
+# Rule 3/11: the web crate uses the font database directly.
+# What it's for: rule 5's bridge calls vectorcraft_text::FontDb.
+# How: adds the workspace's vectorcraft-text to the web crate's dependencies.
+# Verify: the build compiles.
+# If upstream changes: delete if the web crate depends on vectorcraft-text itself.
+- file: apps/*-web/Cargo.toml
+  find: 'vectorcraft-engine = \{ workspace = true \}'
+  after: "\nvectorcraft-text = { workspace = true }"
+
+# Rule 4/11: connect the bridge, and lay type out again when a font arrives.
+# What it's for: text drawn in the stand-in while its font loaded takes the font's shapes and bounds (the
+#   selection box, hit testing, area type flow), not only its pixels.
+# How: each frame, before the app's, playground_fonts::frame (rule 5) connects the font database to the shell
+#   the first time, and after a font arrived runs `text.rescanFonts` (Refresh Font List), which lays out every
+#   document's type again without marking it edited. The renderer's text cache and the font menus follow the
+#   font database's generation by themselves; the Type tool's layout cache does with rules 10–11.
+# Verify: rule 2's Verify; the selection box around the text then fits the new font.
+# If upstream changes: anchor on WebShell's per-frame logic.
+- file: apps/*-web/src/web.rs
+  find: 'app\.logic\(ctx\);'
+  before: |-
+    // playground (patches/illustrator.yaml): the user's installed fonts.
+            playground_fonts::frame(ctx, app);
+            
+
+# Rule 5/11: the bridge between the font database and `playgroundFonts`.
+# What it's for: everything above; this is the only code that talks to the page.
+# How: on the first frame, sets the font database's hooks (rule 1) and registers onList, whose list goes to
+#   add_web_fonts. load() reads a face's bytes once per PostScript name (playgroundFonts.load), adds them to
+#   the font database and wakes the app; request() is playgroundFonts.request. Without the shell (a page not
+#   served by openplayground) nothing is set and the app keeps its bundled fonts.
+# Verify: rules 1, 2 and 6.
+# If upstream changes: this is self-contained; keep it at the end of the web crate's main file and adjust the
+#   names it uses (VectorcraftApp::run, text.rescanFonts).
+- file: apps/*-web/src/web.rs
+  find: '$(?![\s\S])'
+  before: |
+
+    /// playground (patches/illustrator.yaml): the bridge between VectorCraft's font database and the fonts
+    /// installed on the user's computer, `globalThis.playgroundFonts` (shell/fonts.js in
+    /// github.com/daijro/openplayground).
+    mod playground_fonts {
+        use std::cell::{Cell, RefCell};
+        use std::collections::HashSet;
+
+        use vectorcraft_text::FontDb;
+        use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
+
+        thread_local! {
+            /// The running app's context, to wake when a font arrives.
+            static CTX: RefCell<Option<egui::Context>> = const { RefCell::new(None) };
+            static STARTED: Cell<bool> = const { Cell::new(false) };
+            /// PostScript names asked for: each face is read once.
+            static ASKED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+            /// A font arrived since the last frame.
+            static ARRIVED: Cell<bool> = const { Cell::new(false) };
+        }
+
+        /// Each frame, before the app's: connect on the first; after a font arrived, lay type out again (its
+        /// bounds too), as Refresh Font List does.
+        pub fn frame(ctx: &egui::Context, app: &mut vectorcraft_ui_egui::VectorcraftApp) {
+            CTX.with(|c| *c.borrow_mut() = Some(ctx.clone()));
+            if !STARTED.with(|s| s.replace(true)) {
+                install();
+            }
+            if ARRIVED.with(|a| a.replace(false)) {
+                let _ = app.run("text.rescanFonts", Default::default());
+            }
+        }
+
+        fn install() {
+            if api().is_none() || !FontDb::global().use_web_fonts(load, request) {
+                log::warn!("playground: no playgroundFonts on this page; keeping the bundled fonts");
+                return;
+            }
+            let on_list = Closure::<dyn FnMut(JsValue)>::new(|list: JsValue| {
+                let text = |f: &JsValue, key: &str| js_sys::Reflect::get(f, &JsValue::from_str(key)).ok()?.as_string();
+                let fonts: Vec<(String, String, String)> = js_sys::Array::from(&list)
+                    .iter()
+                    .filter_map(|f| Some((text(&f, "family")?, text(&f, "style")?, text(&f, "postscriptName")?)))
+                    .collect();
+                FontDb::global().add_web_fonts(&fonts);
+                repaint();
+            });
+            call("onList", &[on_list.as_ref().clone()]);
+            on_list.forget();
+        }
+
+        fn api() -> Option<JsValue> {
+            js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("playgroundFonts")).ok().filter(JsValue::is_object)
+        }
+
+        /// `playgroundFonts[method](...args)`; None when the shell is missing or the call threw.
+        fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
+            let api = api()?;
+            let f = js_sys::Reflect::get(&api, &JsValue::from_str(method)).ok()?.dyn_into::<js_sys::Function>().ok()?;
+            f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
+        }
+
+        fn repaint() {
+            CTX.with(|c| {
+                if let Some(ctx) = &*c.borrow() {
+                    ctx.request_repaint();
+                }
+            });
+        }
+
+        /// A font menu opened: the browser asks for the fonts the first time (the shell decides).
+        fn request() {
+            call("request", &[]);
+        }
+
+        /// Read the file of a face the browser listed (once) into the font database.
+        fn load(postscript: &str) {
+            if !ASKED.with(|a| a.borrow_mut().insert(postscript.to_string())) {
+                return;
+            }
+            let Some(promise) = call("load", &[JsValue::from_str(postscript)]).and_then(|p| p.dyn_into::<js_sys::Promise>().ok()) else { return };
+            let name = postscript.to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                match wasm_bindgen_futures::JsFuture::from(promise).await {
+                    Ok(bytes) => {
+                        if FontDb::global().add_font(js_sys::Uint8Array::new(&bytes).to_vec()) > 0 {
+                            ARRIVED.with(|a| a.set(true));
+                            repaint();
+                        }
+                    }
+                    Err(e) => log::warn!("playground: couldn't read the font {name}: {e:?}"),
+                }
+            });
+        }
+    }
+
+# Rule 6/11: opening a font menu asks for the fonts.
+# What it's for: the browser's "use your fonts" prompt shows right as the user goes to pick a font (it needs a
+#   recent click), not at startup.
+# How: on the frame the font menu (Character, Properties and Glyphs panels, Find Font) opens, request_web_fonts
+#   (rule 1) calls playgroundFonts.request through the bridge, which asks once per page, and only when the
+#   permission hasn't been given or refused. Once allowed, onList fills the open menu (the rows follow the
+#   generation).
+# Verify: in a fresh profile, select text and open Properties › Character's font menu: the browser asks; Allow →
+#   the open menu lists the installed families.
+# If upstream changes: anchor on wherever the font menu notices it opened.
+- file: crates/ui-egui/src/font_menu.rs
+  find: 'st\.opened = pass;'
+  after: |2-
+
+            // playground (patches/illustrator.yaml): ask the browser for the installed fonts.
+            #[cfg(target_arch = "wasm32")]
+            vectorcraft_text::FontDb::global().request_web_fonts();
+
+# Rule 7/11: Type › Font asks for the fonts too.
+# What it's for: rule 6 for the Type menu's Font list, whose rows draw their samples here.
+# How: each sample of the open list calls request_web_fonts; the shell asks once, while the click on the menu
+#   still counts, and ignores the rest.
+# Verify: in a fresh profile, Type › Font: the browser asks.
+# If upstream changes: anchor on the Type › Font row's sample; without samples there, on where that list shows.
+- file: crates/ui-egui/src/font_menu.rs
+  find: 'pub\(crate\) fn menu_item_sample\(ui: &Ui, slot: egui::Rect, family: &str\) \{'
+  after: |2-
+
+        // playground (patches/illustrator.yaml): ask the browser for the installed fonts.
+        #[cfg(target_arch = "wasm32")]
+        vectorcraft_text::FontDb::global().request_web_fonts();
+
+# Rule 8/11: a font menu sample waits for its font.
+# What it's for: rows of installed families showed their sample in the stand-in (Source Sans 3), cached for
+#   good, so every installed font looked the same.
+# How: on the web, a sample whose family isn't loaded yet draws nothing (rule 2 has started loading it); rule 9
+#   tries those again when fonts arrive.
+# Verify: open the font menu with the fonts allowed: each row's sample shows in its own font a moment later.
+# If upstream changes: anchor on render_sample's face lookup.
+- file: crates/ui-egui/src/font_menu.rs
+  find: 'let face: Arc<vectorcraft_text::FontFace> = db\.face\(family, style\)\?;'
+  after: |2-
+
+        // playground (patches/illustrator.yaml): a browser font still loading: its sample comes when it arrives.
+        #[cfg(target_arch = "wasm32")]
+        if !face.family.eq_ignore_ascii_case(family) {
+            return None;
+        }
+
+# Rule 9/11: samples drawn while their font loaded are drawn again when fonts arrive.
+# What it's for: rule 8's empty samples fill in.
+# How: on the web, when the font database's generation changes, the sample cache forgets its empty entries.
+# Verify: rule 8's.
+# If upstream changes: anchor on the start of sample_texture's cache lookup.
+- file: crates/ui-egui/src/font_menu.rs
+  find: 'let mut s = s\.borrow_mut\(\);(?=\s*if let Some\(t\) = s\.ready\.get\(&key\))'
+  after: |2-
+
+            // playground (patches/illustrator.yaml): fonts arrived: samples that had none are drawn again.
+            #[cfg(target_arch = "wasm32")]
+            {
+                thread_local! { static FONTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+                let generation = vectorcraft_text::FontDb::global().generation();
+                if FONTS.with(|f| f.replace(generation)) != generation {
+                    s.ready.retain(|_, t| t.is_some());
+                }
+            }
+
+# Rules 10–11/11: the Type tool's layout cache follows the fonts available.
+# What it's for: the caret and selection of text being edited when its font arrives fit the font.
+# How: the cache was keyed by the text object only; it's keyed by the font database's generation too, like the
+#   renderer's. (Not wasm-only: it's right on the desktop too, where Refresh Font List changes the fonts.)
+# Verify: type into new point text in an installed family before it has loaded: when it arrives, the caret
+#   sits after the last letter.
+# If upstream changes: delete once the cache follows FontDb::generation itself.
+- file: crates/tools/src/text.rs
+  find: 'cache: Mutex<Option<\(TextObject, Arc<TextLayout>\)>>,'
+  replace: 'cache: Mutex<Option<(TextObject, u64, Arc<TextLayout>)>>,'
+- file: crates/tools/src/text.rs
+  find: 'if let Some\(\(k, l\)\) = c\.as_ref\(\)\s*&& k == t\s*\{\s*return l\.clone\(\);\s*\}\s*let l = Arc::new\(vectorcraft_text::layout\(FontDb::global\(\), t\)\);\s*\*c = Some\(\(t\.clone\(\), l\.clone\(\)\)\);'
+  replace: |-
+    // playground (patches/illustrator.yaml): and by the fonts available.
+            let fonts = FontDb::global().generation();
+            if let Some((k, g, l)) = c.as_ref()
+                && k == t
+                && *g == fonts
+            {
+                return l.clone();
+            }
+            let l = Arc::new(vectorcraft_text::layout(FontDb::global(), t));
+            *c = Some((t.clone(), fonts, l.clone()));
