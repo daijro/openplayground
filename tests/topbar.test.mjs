@@ -96,3 +96,26 @@ test('leaving after working in the app asks first', async () => {
   assert.equal(shown.type(), 'beforeunload')
   await shown.accept()
 })
+
+test('an app that reports its own state is warned about only when it has unsaved changes', async () => {
+  const page = await openPage(browser, `${site.url}${wordPath()}`)
+  await page.locator('.pg-bar').waitFor()
+  await page.mouse.click(400, 300)
+  await page.keyboard.press('a')
+  await page.evaluate(() => playgroundFiles.setUnsaved(false)) // the app says: nothing unsaved
+  let asked = false
+  page.on('dialog', (d) => ((asked = true), d.accept()))
+  await page.close({ runBeforeUnload: true })
+  await new Promise((r) => setTimeout(r, 500))
+  assert.equal(asked, false, 'warned although the app reported no unsaved changes')
+
+  const second = await openPage(browser, `${site.url}${wordPath()}`)
+  await second.locator('.pg-bar').waitFor()
+  await second.mouse.click(400, 300) // gives the page the user activation a beforeunload prompt needs
+  await second.evaluate(() => playgroundFiles.setUnsaved(true))
+  const dialog = new Promise((resolve) => second.once('dialog', resolve))
+  await second.close({ runBeforeUnload: true })
+  const shown = await dialog
+  assert.equal(shown.type(), 'beforeunload')
+  await shown.accept()
+})

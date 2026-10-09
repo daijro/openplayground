@@ -88,6 +88,7 @@ Three parts:
 | `read(path)` | Promise of the file's bytes, for Recent documents and for `?open=`. |
 | `download(name, bytes)` | A regular browser download. |
 | `onOpen(callback)` | Registered once by an integrated app. The shell calls it with `{ path, name, bytes }` for the page's `?open=browser:/…` (once, at startup) and for **Open in app** on one of this app's files from the Files popup. In an app that hasn't registered (sub-projects 2–4), the shell instead drops the file onto the app's canvas as a synthetic drop, as the existing image-paste fix does; most apps open dropped files. |
+| `setUnsaved(unsaved)` | The app's own unsaved state, reported from its frame loop. Once an app reports, the leave warning follows it instead of the input heuristic. |
 
 `types` are extensions without dots, e.g. `['xlsx', 'xlsm', 'csv']`.
 
@@ -114,7 +115,8 @@ the browser's light/dark preference.
     plain links.
 - **Leave warning:** if there has been keyboard or pointer input on the app since the last
   `write()`/`open()`, `beforeunload` warns before leaving. This is a heuristic, because the shell can't see
-  the app's own unsaved state.
+  the app's own unsaved state. Apps that report their own unsaved state (`setUnsaved`, the Office apps) warn
+  exactly when they have unsaved changes.
 - **Version:** the release label, or `main@abc1234 · 2 hours ago` with an amber dot in latest-commit mode.
 - **Files** opens the explorer popup in Browse mode.
 - **⛶** toggles `document.documentElement.requestFullscreen()`.

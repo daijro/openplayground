@@ -9,6 +9,7 @@
 //   write(path, bytes)            queued store write; a failure shows "Download instead"
 //   read(path)                    → Promise<Uint8Array>
 //   download(name, bytes)
+//   setUnsaved(unsaved)           the app's own unsaved state, for the leave warning
 //   onOpen(callback)              files for this app: ?open=browser:/… at startup, and "Open in <app>" in
 //                                 the Files popup; apps that never register get them as a dropped file
 import * as store from './store.js'
@@ -22,6 +23,14 @@ let lastSaveOrOpen = Date.now()
 /** When the app last saved or opened a file (the leave warning compares it with the last input). */
 export const savedAt = () => lastSaveOrOpen
 const mark = () => (lastSaveOrOpen = Date.now())
+
+// An app that tracks its own unsaved state reports it (its patch calls setUnsaved from its frame loop); the
+// leave warning then follows it instead of guessing from input. null until an app reports.
+let reportedUnsaved = null
+export const unsavedReported = () => reportedUnsaved
+const setUnsaved = (unsaved) => {
+  reportedUnsaved = !!unsaved
+}
 
 const fileAt = async (path) => ({ path: toAppPath(path), name: baseName(path), bytes: await store.read(path) })
 
@@ -165,4 +174,4 @@ export async function openFilesPopup() {
   )
 }
 
-globalThis.playgroundFiles = Object.freeze({ open, saveAs, write, read, download, onOpen })
+globalThis.playgroundFiles = Object.freeze({ open, saveAs, write, read, download, onOpen, setUnsaved })
