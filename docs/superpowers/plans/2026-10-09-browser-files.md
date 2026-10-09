@@ -3827,3 +3827,144 @@ Then confirm the live site:
    - the top bar is there;
    - Ctrl+S on a new document shows Keep / Download;
    - Files lists the saved document.
+
+---
+
+## Addendum A (added during execution): warn before closing an app with unsaved changes
+
+The user asked for a warning, in every app, when closing or leaving with unsaved changes. Task 6's leave warning approximates this for all apps: there was input since the last save or open. Addendum A makes it exact where the app can say so.
+
+- **Shell side:** `playgroundFiles.setUnsaved(boolean)`. Once an app has called it, the warning follows the app's own state instead of the input heuristic.
+- **Office apps:** Word, Excel and PowerPoint call it from their frame loop (rule A in Tasks 7–9).
+- **Other apps:** they keep the heuristic until their sub-projects.
+
+### Task 6b: The app-reported unsaved state
+
+**Files:**
+- Modify: `shell/files.js`, `shell/app.js`, `tests/topbar.test.mjs`, `docs/superpowers/specs/2026-10-09-browser-files-design.md`
+
+**Interfaces:**
+- Produces:
+  - `playgroundFiles.setUnsaved(unsaved: boolean)`. The contract becomes `{ open, saveAs, write, read, download, onOpen, setUnsaved }`.
+  - From `files.js`, the export `unsavedReported() → boolean | null`, which is `null` until an app reports.
+
+- [ ] **Step 1: Write the failing test.** Append to `tests/topbar.test.mjs`:
+
+```js
+test('an app that reports its own state is warned about only when it has unsaved changes', async () => {
+  const page = await openPage(browser, `${site.url}${wordPath()}`)
+  await page.locator('.pg-bar').waitFor()
+  await page.mouse.click(400, 300)
+  await page.keyboard.press('a')
+  await page.evaluate(() => playgroundFiles.setUnsaved(false)) // the app says: nothing unsaved
+  let asked = false
+  page.on('dialog', (d) => ((asked = true), d.accept()))
+  await page.close({ runBeforeUnload: true })
+  await new Promise((r) => setTimeout(r, 500))
+  assert.equal(asked, false, 'warned although the app reported no unsaved changes')
+
+  const second = await openPage(browser, `${site.url}${wordPath()}`)
+  await second.locator('.pg-bar').waitFor()
+  await second.mouse.click(400, 300) // gives the page the user activation a beforeunload prompt needs
+  await second.evaluate(() => playgroundFiles.setUnsaved(true))
+  const dialog = new Promise((resolve) => second.once('dialog', resolve))
+  await second.close({ runBeforeUnload: true })
+  const shown = await dialog
+  assert.equal(shown.type(), 'beforeunload')
+  await shown.accept()
+})
+```
+
+Run it: `node --test --test-name-pattern "reports its own state" tests/topbar.test.mjs`
+Expected: FAIL with `playgroundFiles.setUnsaved is not a function`.
+
+- [ ] **Step 2: Add `setUnsaved` to `shell/files.js`.**
+  - Add next to `savedAt`:
+
+    ```js
+    // An app that tracks its own unsaved state reports it (its patch calls setUnsaved from its frame loop); the
+    // leave warning then follows it instead of guessing from input. null until an app reports.
+    let reportedUnsaved = null
+    export const unsavedReported = () => reportedUnsaved
+    const setUnsaved = (unsaved) => {
+      reportedUnsaved = !!unsaved
+    }
+    ```
+
+  - Change the freeze line to `globalThis.playgroundFiles = Object.freeze({ open, saveAs, write, read, download, onOpen, setUnsaved })`.
+  - In the header comment's call list, add `setUnsaved(unsaved)  the app's own unsaved state, for the leave warning`.
+
+- [ ] **Step 3: Use it in `shell/app.js`.**
+  - Change the files.js import to `import { savedAt, unsavedReported } from './files.js'`.
+  - Change the `beforeunload` listener to:
+
+    ```js
+    addEventListener('beforeunload', (e) => {
+      const unsaved = unsavedReported() ?? lastInput > savedAt()
+      if (pendingWrites() > 0 || unsaved) e.preventDefault()
+    })
+    ```
+
+  - Update the comment above it: "…typing or clicking in the app since its last save or open counts as unsaved work, unless the app reports its own state (playgroundFiles.setUnsaved), as do store writes still in flight."
+
+- [ ] **Step 4: Bring the spec along.** In the spec, add a row to the Shell API table:
+
+```
+| `setUnsaved(unsaved)` | The app's own unsaved state, reported from its frame loop. Once an app reports, the leave warning follows it instead of the input heuristic. |
+```
+
+Then in the top bar's "Leave warning" bullet, append: "Apps that report their own unsaved state (`setUnsaved`, the Office apps) warn exactly when they have unsaved changes."
+
+- [ ] **Step 5: Run and commit.**
+
+Run: `node --test tests/topbar.test.mjs && npm test`
+Expected: everything PASSES.
+
+```bash
+git add shell/files.js shell/app.js tests/topbar.test.mjs docs/superpowers/specs/2026-10-09-browser-files-design.md
+git commit -m "Let apps report their unsaved state for the leave warning" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+### Rule A for Tasks 7, 8 and 9: report the app's unsaved state
+
+Each Office patch file gets one more rule, `Rule A`. Put it after the bridge rule, so the bridge module exists. It goes in the web crate's `WebShell::logic`, after the app's own per-frame logic:
+
+```yaml
+# Rule A: tell the page whether there are unsaved changes, for the "Leave site?" warning.
+# What it's for: closing the tab or leaving the app warns exactly when there's something unsaved (instead of
+#   the shell's guess from recent typing/clicking).
+# How: after the app's per-frame logic, report <unsaved expression> through playgroundFiles.setUnsaved; the
+#   bridge only calls into the page when the value changes.
+# Verify: open a document, type, close the tab → the browser asks; save (Ctrl+S), close → it doesn't.
+# If upstream changes: anchor on WebShell's per-frame logic; if the app sets its own beforeunload, delete this.
+- file: apps/*-web/src/web.rs
+  find: 'self\.app\.logic\(ctx\);'
+  replace: |-
+    $&
+            playground::report_unsaved(<unsaved expression>);
+```
+
+Add this function to the bridge module (`mod playground`), after `on_open`:
+
+```rust
+        /// Rule A: the app's unsaved state, for the page's leave warning; only sent when it changes.
+        pub fn report_unsaved(unsaved: bool) {
+            thread_local! { static LAST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
+            if LAST.with(|last| last.replace(Some(unsaved))) != Some(unsaved) {
+                call("setUnsaved", &[JsValue::from_bool(unsaved)]);
+            }
+        }
+```
+
+`<unsaved expression>` per app:
+- **Word:** `self.app.session.dirty`.
+- **Excel:** `self.app.session.documents().iter().any(|d| d.is_dirty())`.
+- **PowerPoint:** whether any open deck is dirty. Find DeckCraft's accessor for this (`SlideApp::save_all` iterates the dirty documents in `crates/ui-egui/src/lib.rs`) and use the same test.
+
+Before writing the rule, confirm in the upstream source (both channels):
+- the exact text of the per-frame call in `WebShell::logic`;
+- that the fields and methods used are public.
+
+Adjust `find` and the expression to match if they differ. Extend each app's end-to-end flow by hand (Step "Check what the test can't"):
+1. Type, then close the tab. The browser asks.
+2. Save, then close. It doesn't ask.
