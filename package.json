@@ -6,9 +6,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "fetch": "node scripts/fetch.mjs"
+    "fetch": "node scripts/fetch.mjs",
+    "test": "node --test tests/"
   },
   "devDependencies": {
+    "playwright-core": "^1.64.0",
     "vite": "^8.3.3",
     "wrangler": "^4.148.0",
     "yaml": "^2.9.1"
