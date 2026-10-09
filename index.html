@@ -103,6 +103,10 @@
     .switch input:checked { background: color-mix(in srgb, var(--warn) 35%, var(--line)); }
     .switch input:checked::before { transform: translateX(14px); background: var(--warn); }
     .switch input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+    .bar-end { display: flex; align-items: center; gap: 18px; }
+    .files-link { color: var(--muted); font-size: 13px; font-weight: 500; text-decoration: none; }
+    .files-link:hover { color: var(--text); }
+    .files-link:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 2px; }
 
     dialog { max-width: min(480px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text); }
     dialog::backdrop { background: rgb(0 0 0 / 0.6); }
@@ -128,7 +132,10 @@
   <main>
     <div class="topbar">
       <p class="host">playground.daijro.dev</p>
-      <label class="switch"><input type="checkbox" role="switch" id="latest">Use latest commits</label>
+      <div class="bar-end">
+        <a class="files-link" href="/files/">Files</a>
+        <label class="switch"><input type="checkbox" role="switch" id="latest">Use latest commits</label>
+      </div>
     </div>
     <h1>Desktop apps,<br>in a browser tab.<span class="moon" aria-hidden="true"></span></h1>
     <nav aria-label="Apps">

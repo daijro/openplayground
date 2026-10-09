@@ -95,6 +95,7 @@ const shell = (req, res, next) => {
 
 export default defineConfig({
   appType: 'mpa',
+  build: { rollupOptions: { input: { main: 'index.html', files: 'files/index.html' } } },
   plugins: [
     {
       name: 'tools',
