@@ -1,9 +1,10 @@
 # Dashboard groups, each with its tools. Each tool is served at /<slug>/ and listed in this order.
 #
 #   repo:   GitHub repo to download the web build from
-#   tag:    release tag to pin (optional; default: the newest non-prerelease that has a matching asset)
-#   branch: build the newest commit on this branch instead, for repos without web releases (optional)
-#   paths:  with `branch:`, only commits changing these paths count as new versions (optional; default: any)
+#   tag:    release tag to pin (optional; default: the newest non-prerelease that has a matching asset, else
+#           the newest pre-release that has one, for repos that have only pre-releases so far)
+#   branch: the branch the head channel builds (optional; default: main)
+#   paths:  only commits changing these paths count as new head versions (optional; default: any)
 #   asset:  regex matching the release asset name (optional; default: "-web-.*\.zip$")
 #   icon:   dashboard icon, also copied in as the tool page's favicon
 #   accent, base: a light and a dark brand color, used for the dashboard hover
@@ -148,6 +149,24 @@ groups:
         icon: icons/autocad.svg
         accent: "#E85984"
         base: "#3A0716"
+
+      - slug: fusion-360
+        name: Fusion 360
+        blurb: Parametric 3D modeling with sketches, constraints and solids.
+        # Designs, and STEP/IGES/STL/3MF/OBJ (each opens as a new design, or joins one that has features).
+        opens: [solvecraft, step, stp, iges, igs, stl, 3mf, obj]
+        imports: []
+        repo: bherbruck/solvecraft
+        # Its web zip is solvecraft-<tag>-web.zip; its 0.x releases are pre-releases.
+        asset: '-web\.zip$'
+        # The web app and what it compiles (dependency changes show up in Cargo.lock; the root Cargo.toml holds
+        # the release profile and the vendored truck patches): CI, docs and desktop-only commits don't rebuild it.
+        paths: [apps/solvecraft-web, crates, vendor, Cargo.lock, Cargo.toml]
+        icon: icons/fusion-360.svg
+        theme: themes/fusion-360.js
+        patches: patches/fusion-360.yaml
+        accent: "#FF7A1F"
+        base: "#3A1806"
 
       - slug: pro-tools
         name: Pro Tools

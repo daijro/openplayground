@@ -42,10 +42,12 @@ export const resolveVersion = async (t, channel) => {
     return { release: { tag_name: `head-${commit}`, ref: newest.sha, label: `${branch}@${commit}`, date: newest.commit.committer.date }, asset: null }
   }
   const pattern = new RegExp(t.asset ?? '-web-.*\\.zip$')
-  const release = (await github(`repos/${t.repo}/releases?per_page=100`))
-    .filter((r) => (t.tag ? r.tag_name === t.tag : !r.draft && !r.prerelease))
+  const releases = (await github(`repos/${t.repo}/releases?per_page=100`))
+    .filter((r) => (t.tag ? r.tag_name === t.tag : !r.draft))
     .sort((a, b) => b.published_at.localeCompare(a.published_at))
-    .find((r) => r.assets.some((a) => pattern.test(a.name)))
+    .filter((r) => r.assets.some((a) => pattern.test(a.name)))
+  // Pre-releases count only while a repo has no full release with a web build (SolveCraft's 0.x releases are pre-releases).
+  const release = releases.find((r) => t.tag || !r.prerelease) ?? releases[0]
   return release ? { release, asset: release.assets.find((a) => pattern.test(a.name)) } : null
 }
 

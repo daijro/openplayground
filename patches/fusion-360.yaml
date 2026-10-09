@@ -1,0 +1,53 @@
+# Follow the browser's light/dark preference at startup, unless the user picked a theme in the app (the
+# toolbar's sun/moon or Preferences; SolveCraft keeps it in localStorage['solvecraft.prefs']). The same rule as
+# themes/fusion-360.js, which fetch.mjs only adds to the upstream release (our builds of patched apps set the
+# theme themselves), sharing its marker key: the theme last set here; a saved theme that differs from it was
+# picked in the app.
+# Runs right after the saved preferences are loaded, before the app is handed to eframe.
+- file: apps/*-web/src/**/*.rs
+  find: 'if let Some\(rs\) = &cc\.wgpu_render_state'
+  before: |-
+    // playground (patches/fusion-360.yaml): the browser's light/dark preference.
+                            if let Some(w) = web_sys::window() && let Ok(Some(st)) = w.local_storage() {
+                                const MARKER: &str = "playground.solvecraft.seededDark";
+                                let seeded = st.get_item(MARKER).ok().flatten();
+                                if seeded.is_none_or(|s| s == app.ui.dark.to_string()) {
+                                    app.ui.dark = w.match_media("(prefers-color-scheme: dark)").ok().flatten().is_some_and(|m| m.matches());
+                                    let _ = st.set_item(MARKER, &app.ui.dark.to_string());
+                                }
+                            }
+                            
+
+
+# The 3D viewport in Chrome's WebGPU.
+# What it's for: the viewport shader's surface-analysis colours call dpdx/dpdy behind a branch on the
+#   front_facing builtin. Chrome's WGSL compiler rejects that ("'dpdx' must only be called from uniform
+#   control flow"), so the "sc_viewport" shader module and every pipeline built from it are invalid: each frame
+#   with the viewport fails to submit and the canvas stays blank once a design is open. (naga, behind desktop
+#   Vulkan/Metal and the browser's WebGL2 path, doesn't enforce the rule, so upstream never sees it.)
+# How: WGSL's own switch for that check, a `diagnostic(off, derivative_uniformity);` directive at the top of
+#   the shader source (naga accepts it too, so `?webgl` keeps working). The derivatives are only used for the
+#   curvature colours, where a non-uniform result at most speckles a pixel.
+# Verify: open the page in Chrome (WebGPU), New Design, S → "Box" → OK: the box shows in the viewport, and the
+#   console has no "Invalid ShaderModule \"sc_viewport\"" warnings. Then the same with ?webgl.
+# If upstream changes: put the directive first in whatever WGSL source the viewport's shader module is built
+#   from; delete this rule if upstream adds it or moves the derivatives out of the branch.
+- file: crates/ui-egui/src/**/*.rs
+  find: 'const SHADER: &str = r#"\n'
+  after: "diagnostic(off, derivative_uniformity);\n"
+
+# A design that arrives by a drop (Files' "Open in Fusion 360" and ?open= hand it over as one) keeps its edits.
+# What it's for: the web build keeps a design opened from the computer as a copy in its own browser storage
+#   (OPFS, "Files in this browser"), so Save writes there. A dropped design skipped that and opened from an
+#   in-memory /upload/ path: Save then wrote nowhere lasting yet marked the design saved, which also deleted the
+#   autosave, so the edits were lost on reload. Every file Files opens here arrives that way.
+# How: any arriving .solvecraft design gets the copy, not only those from the Open picker (they all open as
+#   designs anyway: drop_path opens what isn't STEP or a mesh). Save goes to that copy in SolveCraft's storage,
+#   not back to the file in Files.
+# Verify: put a .solvecraft in Files, open it in Fusion 360 from there, add a Box, Save, reload: the design is
+#   under the start page's Recent ("in this browser") with the box.
+# If upstream changes: anchor on where files_tick decides a design's stored path; delete this if dropped designs
+#   get stored there too.
+- file: apps/*-web/src/**/*.rs
+  find: 'if design && intent == Intent::Open \{'
+  replace: 'if design {'
