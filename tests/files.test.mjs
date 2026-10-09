@@ -201,3 +201,13 @@ test('?open= waits for the app to size its canvas and drop its loader before dro
   await until(() => page.evaluate(() => window.dropped.length), 6000, 'the drop')
   assert.deepEqual(await page.evaluate(() => window.dropped), ['x.txt'])
 })
+
+test('clicking outside a dialog closes it like Cancel', async () => {
+  const page = await shellPage()
+  const answer = page.evaluate(() => playgroundFiles.saveAs({ name: 'x.docx', types: ['docx'], bytes: new Uint8Array() }))
+  await page.getByRole('button', { name: /Keep in browser storage/ }).click()
+  await page.getByLabel('File name').waitFor()
+  await page.mouse.click(8, 8)
+  assert.equal(await answer, null)
+  await page.locator('dialog.pg-modal').waitFor({ state: 'detached' })
+})

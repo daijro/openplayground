@@ -138,7 +138,7 @@ body > canvas:first-of-type {
 .pg-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--pg-danger) 85%, black); }
 .pg-quiet { border-color: transparent; padding: 0 8px; }
 .pg-input { height: 32px; min-width: 0; padding: 0 10px; box-sizing: border-box; border: 1px solid var(--pg-line); border-radius: 8px; background: var(--pg-bg); color: var(--pg-text); font: 14px var(--pg-font); }
-.pg-btn:focus-visible, .pg-input:focus-visible, .pg-option:focus-visible, .pg-ex-list:focus-visible,
+.pg-btn:focus-visible, .pg-input:focus-visible, .pg-option:focus-visible,
 .pg-row-more:focus-visible, .pg-menu-item:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 1px; }
 .pg-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 
@@ -153,6 +153,8 @@ body > canvas:first-of-type {
 .pg-explorer:not([data-mode="browse"]) .pg-row { grid-template-columns: 24px minmax(0, 1fr) 84px 110px; }
 .pg-row:hover { background: var(--pg-raised); }
 .pg-row[aria-selected="true"] { background: var(--pg-select); }
+/* The list takes keyboard focus without a ring around it; the selected row shows where you are instead. */
+.pg-ex-list:focus-visible .pg-row[aria-selected="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pg-accent) 70%, transparent); }
 .pg-row-icon, .pg-row > .pg-icon { width: 22px; height: 22px; border-radius: 5px; color: var(--pg-muted); }
 .pg-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-row-size, .pg-row-when { color: var(--pg-muted); font-size: 12px; text-align: right; white-space: nowrap; }
@@ -252,7 +254,9 @@ body > canvas:first-of-type {
 /* The Files page */
 .pg-files-page { margin: 0; min-height: 100vh; background: var(--pg-bg); color: var(--pg-text); font: 14px/1.45 var(--pg-font); -webkit-font-smoothing: antialiased; }
 .pg-page-head { max-width: 1120px; margin: 0 auto; padding: 32px 16px 16px; }
-.pg-page-head a { color: var(--pg-muted); text-decoration: none; font: 500 12px var(--pg-mono); letter-spacing: 0.04em; }
+.pg-page-head a { display: inline-flex; align-items: center; gap: 7px; color: var(--pg-muted); text-decoration: none; font: 500 12px var(--pg-mono); letter-spacing: 0.04em; }
+.pg-page-head a svg { width: 14px; height: 14px; flex: none; transition: transform 160ms ease; }
+.pg-page-head a:hover svg { transform: translateX(-2px); }
 .pg-page-head a:hover { color: var(--pg-text); }
 .pg-page-head h1 { margin: 12px 0 0; font-size: clamp(32px, 5vw, 52px); font-weight: 600; letter-spacing: -0.04em; line-height: 1.05; }
 .pg-files-main { max-width: 1120px; margin: 0 auto 32px; padding: 0 16px; }

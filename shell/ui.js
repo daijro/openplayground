@@ -61,6 +61,15 @@ export const modal = (build, { label, className = '' } = {}) =>
       e.preventDefault()
       done(null)
     })
+    // A click outside the window (on the dimmed page) closes it like Cancel; only when the press started outside too,
+    // so a drag that wanders out (selecting a name, say) doesn't.
+    const outside = (e) => {
+      const r = dialog.getBoundingClientRect()
+      return e.target === dialog && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)
+    }
+    let pressedOutside = false
+    dialog.addEventListener('pointerdown', (e) => (pressedOutside = outside(e)))
+    dialog.addEventListener('click', (e) => pressedOutside && outside(e) && done(null))
     view = build(done)
     dialog.append(view.el)
     document.body.append(dialog)
