@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
 import { defineConfig } from 'vite'
 import { parse } from 'yaml'
 
@@ -54,13 +55,29 @@ const toolIndex = (req, res, next) => {
   next()
 }
 
+const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
+// The shell (top bar, file explorer, browser file storage: the shell/ folder) at /shell/, for the app pages
+// and /files/. Served as-is, not through Vite's module pipeline, exactly as the built site serves it.
+const shell = (req, res, next) => {
+  const path = req.url.split('?')[0]
+  if (!path.startsWith('/shell/')) return next()
+  const name = path.slice('/shell/'.length)
+  const file = join('shell', name)
+  if (name.includes('..') || !existsSync(file)) return next()
+  res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' })
+  res.end(readFileSync(file))
+}
+
 export default defineConfig({
   appType: 'mpa',
   plugins: [
     {
       name: 'tools',
       transformIndexHtml: { order: 'pre', handler: (html) => html.replace('<!-- groups -->', renderGroups()) },
-      configureServer: (server) => void server.middlewares.use(toolIndex),
+      configureServer: (server) => {
+        server.middlewares.use(shell)
+        server.middlewares.use(toolIndex)
+      },
       configurePreviewServer: (server) => void server.middlewares.use(toolIndex),
     },
   ],
