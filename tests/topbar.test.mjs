@@ -73,6 +73,18 @@ test('the fullscreen button enters and leaves fullscreen', async () => {
   await page.waitForFunction(() => !document.fullscreenElement)
 })
 
+test('without the app list, the bar still has Files and Fullscreen', async () => {
+  const context = await browser.newContext()
+  await context.route('**/shell/apps.json', (r) => r.abort())
+  const page = await openPage(browser, `${site.url}${wordPath()}`, { context })
+  await page.locator('.pg-bar').waitFor()
+  await page.getByRole('button', { name: 'Fullscreen' }).waitFor()
+  await page.getByRole('button', { name: 'Files' }).click()
+  await page.getByRole('dialog', { name: 'Files' }).waitFor()
+  assert.equal(await page.locator('.pg-switch').count(), 0)
+  await context.close()
+})
+
 test('leaving after working in the app asks first', async () => {
   const page = await openPage(browser, `${site.url}${wordPath()}`)
   await page.locator('.pg-bar').waitFor()
