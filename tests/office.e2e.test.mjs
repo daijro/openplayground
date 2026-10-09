@@ -237,8 +237,10 @@ test('PowerPoint: two stored decks stay separate; reopening one switches to it',
   const b = await keep('Deck B')
 
   await openStored('Deck A') // switches to the open Deck A
+  const cleanA = await shot()
   await newSlide() // unsaved
   const dirtyA = await shot()
+  assert.ok(!dirtyA.equals(cleanA), 'New Slide did not change Deck A (missed click?): the duplicate check below would prove nothing')
   await openStored('Deck B')
   assert.ok(!(await shot()).equals(dirtyA), 'the decks should look different (is the canvas rendering?)')
   await newSlide()
