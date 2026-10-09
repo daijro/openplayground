@@ -122,11 +122,12 @@
 
 # Rule 3/11: the web crate uses the font database directly.
 # What it's for: rule 5's bridge calls vectorcraft_text::FontDb.
-# How: adds the workspace's vectorcraft-text to the web crate's dependencies.
+# How: adds the workspace's vectorcraft-text to the web crate's wasm32-only dependencies (a dependency may be
+#   listed there as well as in [dependencies], so this stays valid where upstream already depends on it).
 # Verify: the build compiles.
-# If upstream changes: delete if the web crate depends on vectorcraft-text itself.
+# If upstream changes: delete if every channel's web crate depends on vectorcraft-text itself.
 - file: apps/*-web/Cargo.toml
-  find: 'vectorcraft-engine = \{ workspace = true \}'
+  find: '\[target\.''cfg\(target_arch = "wasm32"\)''\.dependencies\]'
   after: "\nvectorcraft-text = { workspace = true }"
 
 # Rule 4/11: connect the bridge, and lay type out again when a font arrives.
@@ -320,27 +321,3 @@
                     s.ready.retain(|_, t| t.is_some());
                 }
             }
-
-# Rules 10–11/11: the Type tool's layout cache follows the fonts available.
-# What it's for: the caret and selection of text being edited when its font arrives fit the font.
-# How: the cache was keyed by the text object only; it's keyed by the font database's generation too, like the
-#   renderer's. (Not wasm-only: it's right on the desktop too, where Refresh Font List changes the fonts.)
-# Verify: type into new point text in an installed family before it has loaded: when it arrives, the caret
-#   sits after the last letter.
-# If upstream changes: delete once the cache follows FontDb::generation itself.
-- file: crates/tools/src/text.rs
-  find: 'cache: Mutex<Option<\(TextObject, Arc<TextLayout>\)>>,'
-  replace: 'cache: Mutex<Option<(TextObject, u64, Arc<TextLayout>)>>,'
-- file: crates/tools/src/text.rs
-  find: 'if let Some\(\(k, l\)\) = c\.as_ref\(\)\s*&& k == t\s*\{\s*return l\.clone\(\);\s*\}\s*let l = Arc::new\(vectorcraft_text::layout\(FontDb::global\(\), t\)\);\s*\*c = Some\(\(t\.clone\(\), l\.clone\(\)\)\);'
-  replace: |-
-    // playground (patches/illustrator.yaml): and by the fonts available.
-            let fonts = FontDb::global().generation();
-            if let Some((k, g, l)) = c.as_ref()
-                && k == t
-                && *g == fonts
-            {
-                return l.clone();
-            }
-            let l = Arc::new(vectorcraft_text::layout(FontDb::global(), t));
-            *c = Some((t.clone(), fonts, l.clone()));
