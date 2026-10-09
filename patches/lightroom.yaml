@@ -1,0 +1,27 @@
+# Keep the page responsive while LightCraft prepares the photos next to the one on screen.
+# What it's for: once a photo is in the loupe or Develop view, LightCraft prefetches its filmstrip neighbours
+#   (panels/detail.rs → Renderer::prefetch). Every other render goes to the browser build's render workers, but
+#   prefetch always used the local job pool, which in the browser runs one job per frame on the page's only
+#   thread (Renderer::poll → JobPool::run_inline). Preparing one demo photo there froze the whole page, top
+#   bar included, for about 5 s right after opening; a large raw file freezes it longer. The source it decoded
+#   also stayed in the page's own cache, which the workers never read.
+# How: when the renderer has an offload (the workers), a prefetch is queued and dispatched to a worker exactly
+#   like Renderer::request does; the worker keeps the decoded source and the photo's next render goes back to
+#   it (the workers' affinity). Without workers (desktop, or none started) nothing changes.
+# Verify: open /lightroom/ in a fresh browser profile and leave it on the demo library's first photo: a 20 ms
+#   setInterval never stalls (it stopped for ~4.8 s about 7 s in), web.stats `workers.remoteJobs` counts the
+#   prefetches, and stepping to the next photo still shows it at once.
+# If upstream changes: delete this rule once Renderer::prefetch (crates/ui-egui/src/render.rs) hands its job to
+#   `self.offload` itself (or no longer calls `self.pool.submit`). If only the line moved, re-anchor on the
+#   prefetch's pool submit.
+- file: crates/ui-egui/src/render.rs
+  find: 'self\.pool\.submit\(slot, key, priority, Box::new\(move \|\| lightcraft_engine::memory::in_background\(\|\| job\.run\(\)\)\)\);'
+  replace: |-
+    if self.offload.is_some() {
+                self.seq += 1;
+                self.queue.retain(|q| q.slot != slot);
+                self.queue.push(Queued { slot, priority, seq: self.seq, job });
+                self.dispatch();
+                return;
+            }
+            $&

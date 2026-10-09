@@ -64,6 +64,7 @@ groups:
         imports: [jpg, jpeg, png, tif, tiff, webp, psd, jxl, gif, bmp, heic, avif]
         repo: storytold/lightcraft
         icon: icons/lightroom.svg
+        patches: patches/lightroom.yaml
         accent: "#31A8FF"
         base: "#001E36"
 
