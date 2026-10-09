@@ -1,7 +1,8 @@
 // Downloads each tool's web builds (see tools.yaml) on both channels (releases.mjs): its newest release into
 // public/<slug>/, our build (scripts/build.mjs) when there is one, else the upstream release; and its newest
-// commit into public/head/<slug>/, our build of it, else our newest earlier one.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+// commit into public/head/<slug>/, our build of it, else our newest earlier one. Each app's community plug-ins
+// (store.yml) go into its plugins/ folder on both channels.
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -26,13 +27,13 @@ const patch = (t, dir) => {
     if (f.endsWith('.wasm.gz')) wasm[basename(f, '.gz')] = readFileSync(join(dir, f)).readUInt32LE(statSync(join(dir, f)).size - 4)
   }
   // The injected script: the prelude, then the tool's theme script (tools.yaml `theme:`), sharing `tool`.
-  // Our builds of patched tools set the theme in the app itself, so they skip it.
+  // Our builds of tools whose patches set the theme in the app itself (they follow prefers-color-scheme) skip it.
   const { tag, built } = JSON.parse(readFileSync(join(dir, '.release'), 'utf8'))
   const script = [
     `const tool = ${JSON.stringify({ name: t.name, accent: t.accent, tag, wasm })}\n`,
     prelude,
     lazyPipelines,
-    t.theme && !(built && t.patches) && readFileSync(t.theme, 'utf8'),
+    t.theme && !(built && t.patches && readFileSync(t.patches, 'utf8').includes('prefers-color-scheme')) && readFileSync(t.theme, 'utf8'),
   ].filter(Boolean).join('\n')
   const page = join(dir, 'index.html')
   const html = readFileSync(page, 'utf8')
@@ -71,9 +72,55 @@ const patch = (t, dir) => {
       .replace(/(const VERSION = "[^"-]+)(-[0-9a-f]+)?"/, `$1-${version}"`)
     writeFileSync(sw, code)
   }
+
+  // The app's community plug-ins (`store`, below; tools.yaml repo storytold/photocraft takes the store's
+  // `app: photocraft`) in plugins/, with an index.json listing them, which its patches load. Replaced in
+  // place (see install) so one gone from the store goes here too; without a store build they stay as they are.
+  if (store) {
+    const plugins = join(dir, 'plugins')
+    const mine = store.index.filter((p) => p.app === t.repo.split('/')[1])
+    if (!mine.length) return rmSync(plugins, { recursive: true, force: true })
+    mkdirSync(plugins, { recursive: true })
+    for (const p of mine) cpSync(join(store.dir, p.file), join(plugins, p.file))
+    writeFileSync(join(plugins, 'index.json'), JSON.stringify(mine, null, 2) + '\n')
+    const keep = new Set(['index.json', ...mine.map((p) => p.file)])
+    for (const f of readdirSync(plugins)) if (!keep.has(f)) rmSync(join(plugins, f), { recursive: true, force: true })
+  }
+}
+
+// A zip asset into `file`: a release asset, or a local one ({path}).
+const download = async (asset, file) => {
+  if (asset.path) return cpSync(asset.path, file)
+  const zip = await fetch(asset.browser_download_url)
+  if (!zip.ok) throw new Error(`download ${zip.status}`)
+  writeFileSync(file, Buffer.from(await zip.arrayBuffer()))
 }
 
 let built = await builtAssets()
+
+// The ArtCraft Store's plug-ins (.github/workflows/store.yml): the newest artcraft-store-<commit>.zip of the
+// builds release, its .wasm files and an index.json [{id, name, version, author, description, kind, app,
+// file}], unpacked once for patch(). A local out/artcraft-store-*.zip wins, to try one before CI publishes
+// it. None, or a failed download: every app keeps the plug-ins it has.
+const STORE = /^artcraft-store-([0-9a-f]+)\.zip$/
+const store = await (async () => {
+  const out = (f) => join('out', f)
+  const local = existsSync('out') && readdirSync('out').filter((f) => STORE.test(f)).sort((a, b) => statSync(out(b)).mtimeMs - statSync(out(a)).mtimeMs)[0]
+  const asset = local ? { name: local, path: out(local) } : built.filter((a) => STORE.test(a.name)).sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+  if (!asset) return console.log('plug-ins: no artcraft-store build yet')
+  const tmp = mkdtempSync(join(tmpdir(), 'playground-store-'))
+  process.on('exit', () => rmSync(tmp, { recursive: true, force: true }))
+  await download(asset, join(tmp, 'store.zip'))
+  const dir = join(tmp, 'x')
+  execFileSync('unzip', ['-q', join(tmp, 'store.zip'), '-d', dir])
+  // Only plainly named .wasm files that are there: the files come out of the store's build.
+  const index = JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8')).filter(
+    (p) => /^\w[\w.-]*\.wasm$/.test(p.file) && lstatSync(join(dir, p.file), { throwIfNoEntry: false })?.isFile(),
+  )
+  console.log(`plug-ins: ${asset.name}: ${index.map((p) => `${p.name} (${p.app})`).join(', ') || 'none'}`)
+  return { dir, index, version: asset.name.match(STORE)[1] }
+})().catch((e) => console.error(`plug-ins: ${e.message}; every app keeps the plug-ins it has`))
+
 // Each tool's versions, looked up once: the head channel also needs the release, to count commits ahead.
 const versions = new Map()
 const version = (t, channel) => versions.get(`${t.slug} ${channel}`) ?? versions.set(`${t.slug} ${channel}`, resolveVersion(t, channel)).get(`${t.slug} ${channel}`)
@@ -138,13 +185,7 @@ async function install(t, channel, name) {
     console.log(`${name}: downloading ${asset.name} (${(asset.size / 1e6).toFixed(0)} MB)`)
     const tmp = mkdtempSync(join(tmpdir(), 'playground-'))
     try {
-      if (asset.path) {
-        cpSync(asset.path, join(tmp, 'build.zip'))
-      } else {
-        const zip = await fetch(asset.browser_download_url)
-        if (!zip.ok) throw new Error(`download ${zip.status}`)
-        writeFileSync(join(tmp, 'build.zip'), Buffer.from(await zip.arrayBuffer()))
-      }
+      await download(asset, join(tmp, 'build.zip'))
       execFileSync('unzip', ['-q', join(tmp, 'build.zip'), '-d', join(tmp, 'x')])
       // Archives hold one top-level folder (name-web-x.y.z/); use it if present.
       let root = join(tmp, 'x')
@@ -191,4 +232,6 @@ for (const t of tools) {
     installedVersions[channel === 'head' ? `${t.slug}@head` : t.slug] = built ? `${tag}+${asset.match(/-([0-9a-f]{8})\.zip$/)[1]}` : tag
   }
 }
+// The store build the plug-ins come from (kept while there's none to install), so a new one ships too.
+installedVersions['artcraft-store'] = store?.version ?? (existsSync('versions.json') ? JSON.parse(readFileSync('versions.json', 'utf8'))['artcraft-store'] : undefined)
 writeFileSync('versions.json', JSON.stringify(installedVersions, null, 2) + '\n')

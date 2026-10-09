@@ -3,7 +3,7 @@
 // workflows that pick up new releases. GitHub's own schedule for them can lag or not fire at all.
 //
 // Needs the GITHUB_TOKEN secret: a fine-grained token for daijro/openplayground with Actions: read and write.
-const WORKFLOWS = ['build.yml', 'fetch.yml']
+const WORKFLOWS = ['build.yml', 'store.yml', 'fetch.yml']
 
 export default {
   fetch: (request, env) => env.ASSETS.fetch(request),

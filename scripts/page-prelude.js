@@ -81,13 +81,14 @@ addEventListener(
   true,
 )
 
-// The .wasm files are stored gzipped (.wasm.gz) to fit the host's 25 MiB file limit: fetch the .gz and
-// unzip it on the fly, so the app's loader still sees a normal application/wasm response.
+// The app's .wasm files are stored gzipped (.wasm.gz) to fit the host's 25 MiB file limit: fetch the .gz and
+// unzip it on the fly, so the app's loader still sees a normal application/wasm response. Other .wasm files
+// (the plug-ins in plugins/) are fetched as they are.
 const fetchOriginal = window.fetch
 window.fetch = (input, init) => {
   const url = new URL(input instanceof Request ? input.url : input, location.href)
-  if (!url.pathname.endsWith('.wasm')) return fetchOriginal(input, init)
   const total = tool.wasm[url.pathname.split('/').pop()]
+  if (!url.pathname.endsWith('.wasm') || total === undefined) return fetchOriginal(input, init)
   url.pathname += '.gz'
   return fetchOriginal(url, init).then((res) => {
     if (!res.ok) return res
