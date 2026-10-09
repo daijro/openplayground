@@ -113,7 +113,7 @@ function fan(button) {
   function render(instant = false) {
     const shown = files.slice(0, RECENT)
     const rows = shown.map(fileItem)
-    if (!shown.length) rows.push(place(h('div', { class: 'pg-stack-item pg-stack-note' }, label('No files yet. Save one from an app, or drop files into Files.')), 0))
+    if (!shown.length) rows.push(place(h('div', { class: 'pg-stack-item pg-stack-note' }, label('No files yet.')), 0))
     rows.push(
       place(
         h('button', { class: 'pg-stack-item pg-stack-all', type: 'button', role: 'menuitem', onclick: () => (close(), openFilesPopup()) }, label('Open Files'), tile(icon('folder'))),
