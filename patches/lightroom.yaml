@@ -1,4 +1,4 @@
-# Keep the page responsive while LightCraft prepares the photos next to the one on screen.
+# Rule 1: keep the page responsive while LightCraft prepares the photos next to the one on screen.
 # What it's for: once a photo is in the loupe or Develop view, LightCraft prefetches its filmstrip neighbours
 #   (panels/detail.rs → Renderer::prefetch). Every other render goes to the browser build's render workers, but
 #   prefetch always used the local job pool, which in the browser runs one job per frame on the page's only
@@ -25,3 +25,26 @@
                 return;
             }
             $&
+
+# Rule 2: drop the notice LightCraft shows on every launch.
+# What it's for: for 8 s after opening, "LightCraft in the browser is experimental. Your library is kept in this
+#   browser's storage: keep your original photos elsewhere and back up with File ▸ Back Up Library…." covered the
+#   photo, with a box for the ▸ its font can't draw. The warning that matters stays: the one rule 3 fixes, shown
+#   only when the browser hasn't granted persistent storage, so it may really delete the library.
+# How: the `if backend.is_some() { notice(…) }` in WebApp::new goes.
+# Verify: open /lightroom/: no notice at the bottom of the photo on a browser that grants persistent storage.
+# If upstream changes: delete this rule once that notice is gone or no longer shown on every launch; if only its
+#   wording changed, re-anchor on the new text.
+- file: apps/*-web/src/web.rs
+  find: '\n[ \t]*if backend\.is_some\(\) \{\s*notice\(\s*"LightCraft in the browser is experimental\.[^;]*;\s*\}'
+  replace: ''
+
+# Rule 3: write the menu path in the storage warning with characters LightCraft's font has.
+# What it's for: "use File ▸ Back Up Library… now and then." showed a box for ▸.
+# How: "File > Back Up Library".
+# Verify: in a browser that doesn't grant persistent storage (a fresh headless Chromium profile), the notice at
+#   the bottom of the photo reads "use File > Back Up Library now and then." with no box.
+# If upstream changes: delete this rule once the notice no longer has the ▸, or its font draws it.
+- file: apps/*-web/src/web.rs
+  find: 'File ▸ Back Up Library… now and then'
+  replace: 'File > Back Up Library now and then'
