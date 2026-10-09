@@ -109,3 +109,62 @@ test('Excel: Save As, Save, Open and Download', { skip: !E2E }, () =>
       await page.waitForTimeout(500) // let the engine commit the edit before Ctrl+S
     },
   }))
+
+// Two stored workbooks save to their own files, and opening one that's already open switches to it instead of
+// opening a second copy bound to the same file. (?webgl: the canvas is compared as pixels.)
+test('Excel: two stored workbooks stay separate; reopening one switches to it', { skip: !E2E }, async () => {
+  const page = await appPage('excel', { query: '?webgl' })
+  const typeAt = async (text) => {
+    await page.mouse.click(320, 320)
+    await page.keyboard.type(text)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(500)
+  }
+  const shot = () => page.screenshot({ clip: { x: 0, y: 230, width: 1280, height: 430 } })
+  const keep = async (name) => {
+    await page.keyboard.press('Control+s')
+    await page.getByRole('button', { name: /Keep in browser storage/ }).click()
+    await page.getByLabel('File name').fill(name)
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await until(() => stat(page, `/${name}.xlsx`), 15_000, `${name}.xlsx`)
+    await page.waitForTimeout(1000) // the background write settles
+    return stat(page, `/${name}.xlsx`)
+  }
+  const openStored = async (name) => {
+    await page.keyboard.press('Control+o')
+    await page.getByRole('option', { name: new RegExp(`^${name}\\.xlsx`) }).dblclick()
+    await page.locator('dialog.pg-modal').waitFor({ state: 'detached' })
+    await page.waitForTimeout(1000)
+  }
+  const saved = async (name, before) => {
+    await page.keyboard.press('Control+s')
+    await until(async () => (await stat(page, `/${name}.xlsx`)).modified > before.modified, 15_000, `${name} to change`)
+    await page.waitForTimeout(1000)
+    return stat(page, `/${name}.xlsx`)
+  }
+
+  await typeAt('7')
+  const a = await keep('Sheet A')
+  const shotA = await shot()
+  await page.keyboard.press('Control+n')
+  await page.waitForTimeout(800)
+  await typeAt('5')
+  const b = await keep('Sheet B')
+  assert.notDeepEqual(await shot(), shotA, 'the workbooks should look different (is the canvas rendering?)')
+
+  // Each saves to its own file.
+  await openStored('Sheet A')
+  await typeAt('9')
+  const dirtyA = await shot() // A with an unsaved 9
+  await openStored('Sheet B')
+  await typeAt('3')
+  const b2 = await saved('Sheet B', b)
+  assert.equal((await stat(page, '/Sheet A.xlsx')).modified, a.modified, 'saving B changed A')
+
+  // Opening A again switches to the open A (still showing its unsaved 9), not a fresh copy of the stored file.
+  await openStored('Sheet A')
+  assert.deepEqual(await shot(), dirtyA, 'a second copy of A was opened')
+  await saved('Sheet A', a)
+  assert.equal((await stat(page, '/Sheet B.xlsx')).modified, b2.modified, 'saving A changed B')
+  assert.equal(await dialogs(page), 0)
+})

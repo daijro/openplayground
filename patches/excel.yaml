@@ -89,13 +89,23 @@
 # What it's for: so Save (and AutoSave) write back to the file it was opened from.
 # How: files arrive in the inbox as (name, bytes); the bridge (rule 7) names browser-storage files by their
 #   `browser:` path. Passing that as `path` too makes the engine's file.open keep it (it already keeps a
-#   `path` given with base64 bytes); other files open without a path, as before.
+#   `path` given with base64 bytes); other files open without a path, as before. A workbook already open
+#   under that path is switched to, not opened twice: a path-only file.open does that (the engine's
+#   "Already open? Switch to it." check only runs there), so two documents never share one stored file.
 # Verify: Open a stored workbook from the explorer, edit, Ctrl+S: no dialog, and the stored file changes.
+#   Open the same one again (Ctrl+O, or "Open in Excel" from Files): it switches to the open tab.
 # If upstream changes: anchor on where inbox files are opened.
 - file: crates/ui-egui/src/lib.rs
   find: 'self\.session\.run\("file\.open", json!\(\{"name": name, "base64": b64\}\)\)'
   replace: |-
-    self.session.run("file.open", json!({"name": name, "base64": b64, "path": name.starts_with("browser:").then_some(name.as_str())}))
+    self.session.run(
+                "file.open",
+                if self.session.documents().iter().any(|d| d.path.as_deref() == Some(name.as_str())) {
+                    json!({"path": name}) // already open: the engine switches to it
+                } else {
+                    json!({"name": name, "base64": b64, "path": name.starts_with("browser:").then_some(name.as_str())})
+                },
+            )
 
 # Rule 4/7: where the engine writes `browser:` paths in the browser build.
 # What it's for: the engine's save (Save, Save As with a path, AutoSave) ends in io::write_file, which in the
