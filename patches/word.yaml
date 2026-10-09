@@ -10,10 +10,10 @@
 
 
 # ══ Browser storage ══════════════════════════════════════════════════════════════════════════════════════
-# Rules 1–7 connect WordCraft's browser build to openplayground's file storage. The site's shell
+# Rules 1–9 connect WordCraft's browser build to openplayground's file storage. The site's shell
 # (shell/files.js in github.com/daijro/openplayground) gives every app page `globalThis.playgroundFiles`:
 #   open({types}) → [{path, name, bytes}] | null          saveAs({name, types, bytes}) → {path} | {download:true} | null
-#   write(path, bytes)    read(path) → Promise<bytes>      onOpen(callback)
+#   write(path, bytes)    read(path) → Promise<bytes>      onOpen(callback)      setUnsaved(bool)
 # Its files have paths like `browser:/Reports/memo.docx`. What the user gets in Word:
 #   - Save As, and Save on a document that isn't in browser storage yet, ask "Keep in browser storage /
 #     Download to device", then where; the document then lives at that path (title, "Saved" state).
@@ -24,7 +24,7 @@
 # If WordCraft gains its own browser-storage saving, compare it with this list and delete the rules whose
 # job it now does (rule 7's bridge last, once nothing calls it) rather than forcing them to match.
 
-# Rule 1/7: the two hooks the bridge (rule 7) fills in, on the host Services struct.
+# Rule 1/9: the two hooks the bridge (rule 7) fills in, on the host Services struct.
 # What it's for: Save As in the browser has to ask asynchronously (the dialog is a web page), and Recent has
 #   to open browser-storage files asynchronously; Services only had synchronous pickers.
 # How: save_as_async(suggested name, docx bytes) shows the dialog; a "Keep" answer comes back as
@@ -41,7 +41,7 @@
         /// playground: reopen a browser-storage document by its `browser:` path; it arrives through `inbox`.
         pub open_path_async: Option<Box<dyn Fn(&str)>>,
 
-# Rule 2/7: Save and Save As in the browser build.
+# Rule 2/9: Save and Save As in the browser build.
 # What it's for: Save on a `browser:` document writes it back silently; anything else (Save on a new or
 #   uploaded document, Save As) asks Keep / Download instead of downloading straight away.
 # How: runs in WordApp::run before its web branch ("Web: saving and exporting become downloads"). A
@@ -50,7 +50,8 @@
 #   save_as_async (rule 1) gets the name and docx bytes. Save As from the UI (save_as_dialog: pick_save
 #   returns the bare name on the web, then `file.save {path: name}`) lands here too. Exports stay plain
 #   downloads on purpose: `file.saveAs` with a non-browser path (File > Export / Print call it with
-#   "<name>.pdf|odt|html…") and file.exportPdf/exportPng fall through to the download branch.
+#   "<name>.pdf|odt|html…") and file.exportPdf/exportPng fall through to the download branch (which must
+#   not mark the document saved: see rule 8).
 # Verify: new document → type → Ctrl+S → the Keep/Download dialog; Keep → name → Save; type, Ctrl+S → no
 #   dialog, and the file's time in Files changes. File → Export → PDF downloads a .pdf with no dialog.
 # If upstream changes: anchor on whatever handles file.save / file.saveAs in the web build before it
@@ -81,7 +82,7 @@
             }
             
 
-# Rule 3/7: where the engine writes `browser:` paths in the browser build.
+# Rule 3/9: where the engine writes `browser:` paths in the browser build.
 # What it's for: the engine's save (Save, AutoSave) ends in io::save_path, which in the browser build was an
 #   error stub. Now a `browser:` path's bytes go to playgroundFiles.write; other paths still error.
 # How: WEB_WRITE is a fn pointer the bridge (rule 7) sets; the engine crate needs no new dependency.
@@ -102,7 +103,7 @@
             return write(&path, &save_bytes(&path, $2)?);
         }
 
-# Rule 4/7: a working clock in the browser build.
+# Rule 4/9: a working clock in the browser build.
 # What it's for: AutoSave waits for a pause after the last edit, timed with now_ms(), which returns 0.0 in
 #   the browser build, so AutoSave could never fire there. (Status messages time out with it too.)
 # How: the wasm arm returns Date.now() through WEB_NOW_MS, a fn pointer the bridge (rule 7) sets.
@@ -116,12 +117,13 @@
 
     $1WEB_NOW_MS.get().map_or(0.0, |now| now())
 
-# Rule 5/7: Recent documents in browser storage reopen.
+# Rule 5/9: Recent documents in browser storage reopen.
 # What it's for: File → Recent lists `browser:` paths after saving there; clicking one ran `file.open
 #   {path}`, which the browser build can't read synchronously.
 # How: a `browser:` entry goes to open_path_async (rule 1), which reads it into the inbox; the inbox opens it
 #   with its path, so it stays bound to that file.
-# Verify: save a document to browser storage, reload, File → Open: it's under Recent; clicking it opens it.
+# Verify: save a document to browser storage, then within the same session (the Recent list isn't kept
+#   across reloads on the web) File → Open: it's under Recent; clicking it opens it.
 # If upstream changes: anchor on the Recent list's click handler.
 - file: crates/ui-egui/src/backstage.rs
   find: 'let _ = app\.run\("file\.open", json!\(\{"path": p\}\)\);'
@@ -133,7 +135,7 @@
                     let _ = app.run("file.open", json!({"path": p}));
                 }
 
-# Rule 6/7: switch it on at startup.
+# Rule 6/9: switch it on at startup.
 # What it's for: AutoSave back on (the desktop default; the browser build turned it off because it had
 #   nowhere to write), the control channel Save As answers come back on, and the bridge (rule 7) installed.
 # How: just before the app is handed to eframe (the theme rule above inserts its block at the same anchor).
@@ -152,7 +154,7 @@
                         playground::install(&mut app.services, playground_tx, cc.egui_ctx.clone());
                         
 
-# Rule 7/7: the bridge between the app's web services and `playgroundFiles`.
+# Rule 7/9: the bridge between the app's web services and `playgroundFiles`.
 # What it's for: everything above; this is the only code that talks to the page.
 # How: install() replaces open_async (rfd) with the explorer, fills save_as_async / open_path_async (rule 1),
 #   WEB_WRITE (rule 3) and WEB_NOW_MS (rule 4), and registers onOpen (?open= and Files' "Open in Word").
@@ -303,6 +305,40 @@
             }
         }
     }
+
+# Rule 8/9: exporting or printing doesn't mark a stored document saved.
+# What it's for: upstream's download branch sets `dirty = false` after any download, including PDF/ODT export
+#   and Print (rule 2 lets those through). With a stored document open that cleared the unsaved state, so
+#   AutoSave skipped the edits, the leave warning (rule A) stayed silent and the title lost its dot.
+# How: with save_as_async set (the shell is present) the download branch leaves `dirty` alone. Without the
+#   shell the line is unchanged, so upstream behavior stays.
+# Verify: open a stored document, type, File → Export → PDF: the title keeps its dot, and Ctrl+S (or
+#   AutoSave) still writes the edit to the stored file.
+# If upstream changes: anchor on whatever clears dirty after a download; delete once exports no longer do.
+- file: crates/ui-egui/src/lib.rs
+  find: '(d\(&name, &bytes\);\s*\}\s*)self\.session\.dirty = false;'
+  replace: |-
+    $1if self.services.save_as_async.is_none() {
+                    self.session.dirty = false;
+                }
+
+# Rule 9/9: opening the document that's already open keeps its unsaved edits.
+# What it's for: Ctrl+O and picking the open stored file, Files > "Open in Word", or its Recent entry ran
+#   file.open again and replaced the edited document with the stored copy. (Excel and PowerPoint switch to
+#   the open document instead; see their patches.)
+# How: drain_inbox skips a delivered `browser:` file whose path is the current document's and just closes
+#   the Backstage, so the document on screen stays as it is.
+# Verify: open a stored document, type, Ctrl+O, open the same file: the typing is still there.
+# If upstream changes: anchor on the start of drain_inbox's loop; delete if opening an open path becomes a no-op.
+- file: crates/ui-egui/src/lib.rs
+  find: '(for \(name, bytes\) in files \{)(\s*let lower = name\.to_ascii_lowercase\(\);\s*let data = )'
+  replace: |-
+    $1
+                if name.starts_with("browser:") && self.session.path.as_ref().is_some_and(|p| p.to_string_lossy() == name.as_str()) {
+                    self.ui.backstage = false;
+                    continue;
+                }
+                $2
 
 # Rule A: tell the page whether there are unsaved changes, for the "Leave site?" warning.
 # What it's for: closing the tab or leaving the app warns exactly when there's something unsaved (instead of

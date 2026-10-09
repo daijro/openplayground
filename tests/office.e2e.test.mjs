@@ -88,7 +88,53 @@ test('Word: File → Export → PDF is a plain download', { skip: !E2E }, async 
   assert.equal(await dialogs(page), 0, 'Export opened a shell dialog')
 })
 
-test('Word: Save As, Save, AutoSave, Open and Download', { skip: !E2E }, () =>
+// A stored document stays "unsaved" through an export (upstream's download branch used to clear it, so AutoSave
+// and the leave warning went quiet), and reopening the open document keeps its unsaved edits.
+test('Word: exporting keeps a stored document unsaved; reopening it keeps the edits', { skip: !E2E }, async () => {
+  const page = await appPage('word', { context: await browser.newContext({ acceptDownloads: true, colorScheme: 'light' }) })
+  const unsaved = () => page.evaluate(() => import('/shell/files.js').then((m) => m.unsavedReported()))
+  const type = async (text) => {
+    await page.mouse.click(700, 450)
+    await page.keyboard.type(text)
+  }
+  await type(' one')
+  await page.keyboard.press('Control+s')
+  await page.getByRole('button', { name: /Keep in browser storage/ }).click()
+  await page.getByLabel('File name').fill('E2E Export')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await until(() => stat(page, '/E2E Export.docx'), 15_000, 'E2E Export.docx')
+  await page.waitForTimeout(1500)
+  assert.equal(await unsaved(), false)
+
+  // Edit and reopen the same stored file straight away (before AutoSave writes the edit): the edit is still
+  // on the page, not replaced by the stored copy.
+  const before = await stat(page, '/E2E Export.docx')
+  await type(' two')
+  const shot = () => page.screenshot({ clip: { x: 0, y: 150, width: 1280, height: 500 } })
+  const edited = await shot()
+  await page.keyboard.press('Control+o')
+  await page.getByRole('option', { name: /^E2E Export\.docx/ }).dblclick()
+  await page.locator('dialog.pg-modal').waitFor({ state: 'detached' })
+  await page.waitForTimeout(500)
+  assert.equal((await stat(page, '/E2E Export.docx')).modified, before.modified, 'AutoSave beat the reopen: the test needs to be faster')
+  assert.deepEqual(await shot(), edited, 'reopening the open document discarded its edits')
+
+  // Edit again, then File → Export → PDF (same clicks as the export test): still unsaved, and Ctrl+S writes it.
+  await type(' three')
+  assert.equal(await unsaved(), true)
+  await page.mouse.click(27, 89)
+  await page.waitForTimeout(600)
+  await page.mouse.click(44, 412)
+  await page.waitForTimeout(600)
+  const [download] = await Promise.all([page.waitForEvent('download', { timeout: 15_000 }), page.mouse.click(400, 165)])
+  assert.match(download.suggestedFilename(), /\.pdf$/)
+  assert.equal(await unsaved(), true, 'the export marked the document saved')
+  assert.equal(await dialogs(page), 0)
+  await page.keyboard.press('Control+s')
+  await until(async () => (await stat(page, '/E2E Export.docx')).modified > before.modified, 15_000, 'the save after Export')
+})
+
+test('Word: Save As, Save, AutoSave, Open and Download',{ skip: !E2E }, () =>
   roundTrip('word', {
     savedAs: 'E2E Word.docx',
     autosave: true,

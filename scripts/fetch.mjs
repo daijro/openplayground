@@ -59,13 +59,16 @@ const patch = (t, dir) => {
   }
 
   // EffectCraft's service worker precaches the .wasm by name and serves its cached index.html first: point
-  // it at the .wasm.gz, and tie its VERSION to the patched page so returning visitors pick up changes.
+  // it at the .wasm.gz, and tie its VERSION to the patched page and to everything in shell/ (the worker
+  // serves /shell/* cache-first too), so returning visitors pick up changes.
   const sw = join(dir, 'sw.js')
   if (existsSync(sw)) {
-    const hash = createHash('sha256').update(html).digest('hex').slice(0, 8)
+    const hash = createHash('sha256').update(html)
+    for (const f of readdirSync('shell').sort()) hash.update(readFileSync(join('shell', f)))
+    const version = hash.digest('hex').slice(0, 8)
     const code = readFileSync(sw, 'utf8')
       .replaceAll('.wasm"', '.wasm.gz"')
-      .replace(/(const VERSION = "[^"-]+)(-[0-9a-f]+)?"/, `$1-${hash}"`)
+      .replace(/(const VERSION = "[^"-]+)(-[0-9a-f]+)?"/, `$1-${version}"`)
     writeFileSync(sw, code)
   }
 }
