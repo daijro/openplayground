@@ -1,0 +1,19 @@
+// The shell on an app page (fetch.mjs adds it to each installed app's index.html, before the app's own
+// scripts): the browser file storage API (files.js) the app's patches call, the top bar, and a warning
+// before leaving with work the app may not have saved.
+import { savedAt } from './files.js'
+import { pendingWrites } from './store.js'
+import { mountTopbar } from './topbar.js'
+
+const start = () => mountTopbar().catch((e) => console.error('playground: top bar', e))
+if (document.body) start()
+else addEventListener('DOMContentLoaded', start, { once: true })
+
+// The shell can't see an app's own "unsaved" state, so: typing or clicking in the app since its last save or
+// open counts as unsaved work, as do store writes still in flight.
+let lastInput = 0
+const inShell = (target) => target instanceof Element && !!target.closest('.pg-bar, .pg-modal, .pg-toasts, .pg-apps')
+for (const type of ['keydown', 'pointerdown']) addEventListener(type, (e) => inShell(e.target) || (lastInput = Date.now()), true)
+addEventListener('beforeunload', (e) => {
+  if (pendingWrites() > 0 || lastInput > savedAt()) e.preventDefault()
+})

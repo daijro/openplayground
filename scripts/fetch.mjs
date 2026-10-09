@@ -41,7 +41,14 @@ const patch = (t, dir) => {
     // The preload would fetch the raw .wasm, which is now .wasm.gz.
     .replace(/<link rel="preload" href="[^"]*\.wasm"[^>]*>/g, '')
     .replace(/\s*<script id="playground-prelude">[\s\S]*?<\/script>/, '')
-    .replace(/<meta charset[^>]*>/i, (m) => `${m}\n  <script id="playground-prelude">{\n${script}}</script>`)
+    .replace(/\s*<link rel="stylesheet" href="\/shell\/shell\.css">/g, '')
+    .replace(/\s*<script type="module" src="\/shell\/app\.js"><\/script>/g, '')
+    // The prelude, then the shell (top bar, browser file storage: shell/), first in <head>, so
+    // playgroundFiles exists before the app's own scripts start it.
+    .replace(
+      /<meta charset[^>]*>/i,
+      (m) => `${m}\n  <script id="playground-prelude">{\n${script}}</script>\n  <link rel="stylesheet" href="/shell/shell.css">\n  <script type="module" src="/shell/app.js"></script>`,
+    )
   writeFileSync(page, html)
 
   // Workers that run the app (EffectCraft renders frames in some) get lazy-pipelines.js too.

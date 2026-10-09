@@ -9,7 +9,7 @@ export const h = (tag, props = {}, ...children) => {
     else if (key === 'class') el.className = value
     else el.setAttribute(key, value === true ? '' : value)
   }
-  el.append(...children.flat().filter((c) => c != null && c !== false))
+  el.append(...children.flat(Infinity).filter((c) => c != null && c !== false))
   return el
 }
 
