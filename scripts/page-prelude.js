@@ -51,6 +51,7 @@ const progressUI = (total, download) => {
 addEventListener(
   'keydown',
   (e) => {
+    if (e.target instanceof Element && e.target.closest('.pg-bar, .pg-modal, .pg-toasts')) return
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return
     const k = e.key.toLowerCase()
     if (k.length !== 1 || 'cvxar123456789'.includes(k) || (e.shiftKey && 'ijc'.includes(k))) return
@@ -65,6 +66,7 @@ addEventListener(
 addEventListener(
   'paste',
   (e) => {
+    if (e.target instanceof Element && e.target.closest('.pg-bar, .pg-modal, .pg-toasts')) return
     const images = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'))
     const canvas = document.querySelector('canvas')
     if (!images.length || !canvas || e.clipboardData.getData('text')) return

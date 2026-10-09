@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Files</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/shell/shell.css">
+</head>
+<body class="pg-files-page">
+  <header class="pg-page-head">
+    <a href="/">← playground.daijro.dev</a>
+    <h1>Files</h1>
+  </header>
+  <main class="pg-files-main" id="files"></main>
+  <script type="module">
+    import { mountFilesPage } from '/shell/files-page.js'
+    mountFilesPage(document.getElementById('files'))
+  </script>
+</body>
+</html>

@@ -7,3 +7,308 @@
     let mut app = app;
     let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|m| m.matches());
     let _ = app.run("view.darkMode", serde_json::json!({"on": dark}));
+# Editing a cell must not panic in the browser build.
+# What it's for: every edit goes through cmd::commit, which starts a profiling timer with
+#   std::time::Instant::now() even when profiling is off; std has no clock on wasm32-unknown-unknown, so the
+#   first cell edit panicked ("time not implemented on this platform") and froze the app.
+# How: on wasm32 the timer is a stub whose elapsed() is zero (it is only printed under GRIDCRAFT_PROFILE).
+# Verify: type in a cell in the browser: no panic in the console; the e2e Excel test edits cells.
+# If upstream changes: delete this once commit no longer calls Instant::now on wasm (a web-time Instant, or
+#   the timer behind cfg(not(wasm32))).
+- file: crates/engine/src/cmd/mod.rs
+  find: 'let t0 = std::time::Instant::now\(\);'
+  replace: |-
+    #[cfg(not(target_arch = "wasm32"))]
+        let t0 = std::time::Instant::now();
+        #[cfg(target_arch = "wasm32")]
+        let t0 = {
+            struct NoClock;
+            impl NoClock {
+                fn elapsed(&self) -> std::time::Duration {
+                    std::time::Duration::ZERO
+                }
+            }
+            NoClock
+        };
+
+
+# ══ Browser storage ══════════════════════════════════════════════════════════════════════════════════════
+# Rules 1–7 connect GridCraft's browser build to openplayground's file storage. The site's shell
+# (shell/files.js in github.com/daijro/openplayground) gives every app page `globalThis.playgroundFiles`:
+#   open({types}) → [{path, name, bytes}] | null          saveAs({name, types, bytes}) → {path} | {download:true} | null
+#   write(path, bytes)    read(path) → Promise<bytes>      onOpen(callback)
+# Its files have paths like `browser:/Reports/budget.xlsx`. What the user gets in Excel:
+#   - Save on a workbook without a file, and Save As, ask "Keep in browser storage / Download to device", then
+#     where; the workbook then lives at that path (window title, unsaved state).
+#   - Save on a browser-storage workbook writes back to it silently; the AutoSave switch in the title bar
+#     (off by default, as upstream) does the same after each change.
+#   - Open uses the site's file explorer (with "From computer…"); each workbook keeps its own path.
+#   - The shell's ?open=browser:/… and Files' "Open in Excel" open a stored workbook.
+# If GridCraft gains its own browser-storage saving, compare it with this list and delete the rules whose
+# job it now does (rule 7's bridge last, once nothing calls it) rather than forcing them to match.
+
+# Rule 1/7: the Save As hook the bridge (rule 7) fills in, on the host Services struct.
+# What it's for: Save As in the browser has to ask asynchronously (the dialog is a web page); Services only
+#   had a synchronous pick_save (None on the web).
+# How: save_as_async(suggested name, xlsx bytes) shows the dialog; a "Keep" answer comes back as
+#   `file.saveAs {path}` on the control channel (rule 6).
+# Verify: rule 2 compiles and uses it.
+# If upstream changes: put it on whatever struct carries the web services (open_async, download, inbox).
+- file: crates/ui-egui/src/lib.rs
+  find: 'pub inbox: Option<Inbox>,'
+  replace: |-
+    $&
+        /// playground (patches/excel.yaml): ask where to save: the suggested name and the xlsx bytes (for a
+        /// download). A "Keep" answer comes back as `file.saveAs {path: "browser:/…"}` on the control channel.
+        pub save_as_async: Option<Box<dyn Fn(&str, Vec<u8>)>>,
+
+# Rule 2/7: Save As in the browser build.
+# What it's for: the engine asks for a path (Save without one, Save As) with a "saveAs" dialog request;
+#   on the web open_dialog downloaded the workbook straight away. Now it asks Keep / Download.
+# How: a new arm in open_dialog("saveAs"), between the desktop picker and the download branch, gets the
+#   bytes the download branch would have (file.saveBytes) and hands them to save_as_async (rule 1). Keep →
+#   `file.saveAs {path}` runs the engine's save, which writes through io::write_file → WEB_WRITE (rule 4) and
+#   sets the workbook's path. Save on a workbook that has a `browser:` path never comes here: the engine
+#   writes it directly.
+# Verify: new workbook → type in a cell → Ctrl+S → the Keep/Download dialog; Keep → name → Save; edit,
+#   Ctrl+S → no dialog, and the file's time in Files changes.
+# If upstream changes: anchor on the web build's handling of the "saveAs" dialog request.
+- file: crates/ui-egui/src/lib.rs
+  find: '\} else if let Some\(dl\) = &self\.services\.download'
+  replace: |-
+    } else if let Some(ask) = &self.services.save_as_async
+                    && let Ok(r) = self.session.run("file.saveBytes", json!({"format": "xlsx"}))
+                    && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
+                {
+                    // playground (patches/excel.yaml): Keep in browser storage, or download.
+                    let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
+                    ask(&name, b);
+                $&
+
+# Rule 3/7: an opened browser-storage workbook keeps its path.
+# What it's for: so Save (and AutoSave) write back to the file it was opened from.
+# How: files arrive in the inbox as (name, bytes); the bridge (rule 7) names browser-storage files by their
+#   `browser:` path. Passing that as `path` too makes the engine's file.open keep it (it already keeps a
+#   `path` given with base64 bytes); other files open without a path, as before. A workbook already open
+#   under that path is switched to, not opened twice: a path-only file.open does that (the engine's
+#   "Already open? Switch to it." check only runs there), so two documents never share one stored file.
+# Verify: Open a stored workbook from the explorer, edit, Ctrl+S: no dialog, and the stored file changes.
+#   Open the same one again (Ctrl+O, or "Open in Excel" from Files): it switches to the open tab.
+# If upstream changes: anchor on where inbox files are opened.
+- file: crates/ui-egui/src/lib.rs
+  find: 'self\.session\.run\("file\.open", json!\(\{"name": name, "base64": b64\}\)\)'
+  replace: |-
+    self.session.run(
+                "file.open",
+                if self.session.documents().iter().any(|d| d.path.as_deref() == Some(name.as_str())) {
+                    json!({"path": name}) // already open: the engine switches to it
+                } else {
+                    json!({"name": name, "base64": b64, "path": name.starts_with("browser:").then_some(name.as_str())})
+                },
+            )
+
+# Rule 4/7: where the engine writes `browser:` paths in the browser build.
+# What it's for: the engine's save (Save, Save As with a path, AutoSave) ends in io::write_file, which in the
+#   browser build was an error stub. Now a `browser:` path's bytes go to playgroundFiles.write.
+# How: WEB_WRITE is a fn pointer the bridge (rule 7) sets; the engine crate needs no new dependency.
+# Verify: rule 2's flow stores the workbook; a silent Save changes it.
+# If upstream changes: put the hook wherever the wasm build's "write bytes to a path" lives.
+- file: crates/engine/src/io.rs
+  find: '(#\[cfg\(target_arch = "wasm32"\)\]\s*pub fn write_file\((\w+): &str, (\w+): &\[u8\]\) -> Result<\(\)> \{)'
+  replace: |-
+    /// playground (patches/excel.yaml): where `browser:` paths are written in the browser build. The web
+    /// crate's bridge sets it to openplayground's `playgroundFiles.write`; unset, writing errors as upstream.
+    pub static WEB_WRITE: std::sync::OnceLock<fn(&str, &[u8]) -> std::result::Result<(), String>> = std::sync::OnceLock::new();
+
+    $1
+        if let Some(write) = WEB_WRITE.get()
+            && $2.starts_with("browser:")
+        {
+            return write($2, $3).map_err(EngineError::Other);
+        }
+
+# Rule 5/7: a working clock in the browser build.
+# What it's for: AutoSave waits 2 s between saves, timed with now_ms(), which returns 0.0 in the browser
+#   build, so AutoSave could never fire there.
+# How: the wasm arm returns Date.now() through WEB_NOW_MS, a fn pointer the bridge (rule 7) sets.
+# Verify: turn AutoSave on for a browser-storage workbook, edit a cell, wait ~3 s: the stored file updates.
+# If upstream changes: if now_ms gets a real wasm clock, delete this.
+- file: crates/ui-egui/src/lib.rs
+  find: '(pub fn now_ms\(\) -> f64 \{[\s\S]*?#\[cfg\(target_arch = "wasm32"\)\]\s*\{\s*)0\.0'
+  replace: |-
+    /// playground (patches/excel.yaml): the browser clock (`Date.now`), set by the web crate's bridge.
+    pub static WEB_NOW_MS: std::sync::OnceLock<fn() -> f64> = std::sync::OnceLock::new();
+
+    $1WEB_NOW_MS.get().map_or(0.0, |now| now())
+
+# Rule 6/7: switch it on at startup.
+# What it's for: the control channel Save As answers come back on, and the bridge (rule 7) installed.
+# How: just before the app is handed to eframe (the theme rule above inserts its block at the same anchor);
+#   control_rx is the app's existing, otherwise desktop-only, control receiver.
+# Verify: rules 2–5 work; without the shell (playgroundFiles missing) install() returns early and the app
+#   behaves as upstream.
+# If upstream changes: anchor on where web.rs hands the app to eframe.
+- file: apps/*-web/src/**/*.rs
+  find: 'Ok\(Box::new\(\w*Shell\b'
+  before: |
+    // playground (patches/excel.yaml): browser storage.
+                        let mut app = app;
+                        let (playground_tx, playground_rx) = std::sync::mpsc::channel();
+                        app.control_rx = Some(playground_rx);
+                        playground::install(&mut app.services, playground_tx, cc.egui_ctx.clone());
+                        
+
+# Rule 7/7: the bridge between the app's web services and `playgroundFiles`.
+# What it's for: everything above; this is the only code that talks to the page.
+# How: install() replaces open_async (rfd) with the explorer, fills save_as_async (rule 1), WEB_WRITE
+#   (rule 4) and WEB_NOW_MS (rule 5), and registers onOpen (?open= and Files' "Open in Excel"). Save As
+#   answers go out as `file.saveAs {path}` through the control channel (rule 6). Without playgroundFiles it
+#   changes nothing.
+# Verify: the browser-storage flows above.
+# If upstream changes: this is self-contained; keep it at the end of the web crate's main file and adjust
+#   the names it uses (Services fields, ControlRequest, Inbox).
+- file: apps/*-web/src/web.rs
+  find: '$(?![\s\S])'
+  before: |
+
+    /// playground (patches/excel.yaml): the bridge between GridCraft's web services and openplayground's
+    /// browser file storage, `globalThis.playgroundFiles` (shell/files.js in github.com/daijro/openplayground).
+    mod playground {
+        use std::sync::mpsc::Sender;
+
+        use gridcraft_ui_egui::{ControlRequest, Inbox, Services};
+        use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
+
+        /// What Excel opens (the list its rfd picker used).
+        const OPENS: &[&str] = &["xlsx", "xlsm", "csv", "tsv", "txt", "json"];
+
+        /// Route the app's file services through browser storage. Without the shell (a page not served by
+        /// openplayground) nothing changes: the rfd picker and downloads stay.
+        pub fn install(services: &mut Services, control: Sender<ControlRequest>, ctx: egui::Context) {
+            if api().is_none() {
+                log::warn!("playground: no playgroundFiles on this page; keeping downloads");
+                return;
+            }
+            let Some(inbox) = services.inbox.clone() else { return };
+            let _ = gridcraft_engine::io::WEB_WRITE.set(write);
+            let _ = gridcraft_ui_egui::WEB_NOW_MS.set(js_sys::Date::now);
+            let (i, c) = (inbox.clone(), ctx.clone());
+            services.open_async = Some(Box::new(move || open(OPENS, i.clone(), c.clone())));
+            let c = ctx.clone();
+            services.save_as_async = Some(Box::new(move |name: &str, bytes: Vec<u8>| {
+                save_as(name, &["xlsx"], &bytes, control.clone(), c.clone(), "file.saveAs");
+            }));
+            on_open(inbox, ctx);
+        }
+
+        fn api() -> Option<JsValue> {
+            js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("playgroundFiles")).ok().filter(JsValue::is_object)
+        }
+
+        /// `playgroundFiles[method](...args)`; None when the shell is missing or the call threw.
+        fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
+            let api = api()?;
+            let f = js_sys::Reflect::get(&api, &JsValue::from_str(method)).ok()?.dyn_into::<js_sys::Function>().ok()?;
+            f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
+        }
+
+        fn object(fields: &[(&str, JsValue)]) -> JsValue {
+            let o = js_sys::Object::new();
+            for (k, v) in fields {
+                let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), v);
+            }
+            o.into()
+        }
+
+        fn list(items: &[&str]) -> JsValue {
+            items.iter().map(|s| JsValue::from_str(s)).collect::<js_sys::Array>().into()
+        }
+
+        fn field(v: &JsValue, key: &str) -> JsValue {
+            js_sys::Reflect::get(v, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+        }
+
+        /// Await a promise from `call`: None when missing, rejected, or answered null/undefined (cancelled).
+        async fn settle(promise: Option<JsValue>) -> Option<JsValue> {
+            let promise = promise?.dyn_into::<js_sys::Promise>().ok()?;
+            match wasm_bindgen_futures::JsFuture::from(promise).await {
+                Ok(v) if !v.is_null() && !v.is_undefined() => Some(v),
+                Ok(_) => None,
+                Err(e) => {
+                    log::error!("playground: {e:?}");
+                    None
+                }
+            }
+        }
+
+        /// WEB_WRITE: hand a `browser:` path's bytes to the store, which saves them in the background.
+        fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
+            call("write", &[JsValue::from_str(path), js_sys::Uint8Array::from(bytes).into()])
+                .map(|_| ())
+                .ok_or_else(|| format!("{path}: browser storage isn't available"))
+        }
+
+        /// A file from the shell ({path, name, bytes}) into the inbox: under its `browser:` path when it has
+        /// one, so the workbook keeps it (rule 3), else under its name.
+        fn deliver(file: &JsValue, inbox: &Inbox) {
+            let name = field(file, "path").as_string().or_else(|| field(file, "name").as_string()).unwrap_or_else(|| "Book.xlsx".into());
+            let bytes = js_sys::Uint8Array::new(&field(file, "bytes")).to_vec();
+            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+        }
+
+        fn open(types: &[&str], inbox: Inbox, ctx: egui::Context) {
+            let promise = call("open", &[object(&[("types", list(types))])]);
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(files) = settle(promise).await else { return };
+                for file in js_sys::Array::from(&files).iter() {
+                    deliver(&file, &inbox);
+                }
+                ctx.request_repaint();
+            });
+        }
+
+        /// Ask Keep / Download. Keep → the app saves to the chosen `browser:` path itself (`command {path}` on
+        /// the control channel); Download → the shell has already downloaded `bytes`.
+        fn save_as(name: &str, types: &[&str], bytes: &[u8], control: Sender<ControlRequest>, ctx: egui::Context, command: &'static str) {
+            let options = object(&[("name", JsValue::from_str(name)), ("types", list(types)), ("bytes", js_sys::Uint8Array::from(bytes).into())]);
+            let promise = call("saveAs", &[options]);
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(answer) = settle(promise).await else { return };
+                let Some(path) = field(&answer, "path").as_string() else { return };
+                let (request, _reply) = ControlRequest::new("engine.execute", serde_json::json!({"command": command, "params": {"path": path}}));
+                let _ = control.send(request);
+                ctx.request_repaint();
+            });
+        }
+
+        /// Files the shell hands this app: ?open=browser:/… at startup, and "Open in Excel" from Files.
+        fn on_open(inbox: Inbox, ctx: egui::Context) {
+            let callback = Closure::<dyn FnMut(JsValue)>::new(move |file: JsValue| {
+                deliver(&file, &inbox);
+                ctx.request_repaint();
+            });
+            call("onOpen", &[callback.as_ref().clone()]);
+            callback.forget();
+        }
+
+        /// Rule A: the app's unsaved state, for the page's leave warning; only sent when it changes.
+        pub fn report_unsaved(unsaved: bool) {
+            thread_local! { static LAST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
+            if LAST.with(|last| last.replace(Some(unsaved))) != Some(unsaved) {
+                call("setUnsaved", &[JsValue::from_bool(unsaved)]);
+            }
+        }
+    }
+
+# Rule A: tell the page whether there are unsaved changes, for the "Leave site?" warning.
+# What it's for: closing the tab or leaving the app warns exactly when there's something unsaved (instead of
+#   the shell's guess from recent typing/clicking).
+# How: after the app's per-frame logic, report whether any open workbook is dirty through
+#   playgroundFiles.setUnsaved; the bridge only calls into the page when the value changes.
+# Verify: open a workbook, type, close the tab -> the browser asks; save (Ctrl+S), close -> it doesn't.
+# If upstream changes: anchor on WebShell's per-frame logic; if the app sets its own beforeunload, delete this.
+- file: apps/*-web/src/web.rs
+  find: 'self\.app\.logic\(ctx\);'
+  replace: |-
+    $&
+            playground::report_unsaved(self.app.session.documents().iter().any(|d| d.is_dirty()));

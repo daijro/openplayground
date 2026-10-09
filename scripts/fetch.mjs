@@ -41,7 +41,14 @@ const patch = (t, dir) => {
     // The preload would fetch the raw .wasm, which is now .wasm.gz.
     .replace(/<link rel="preload" href="[^"]*\.wasm"[^>]*>/g, '')
     .replace(/\s*<script id="playground-prelude">[\s\S]*?<\/script>/, '')
-    .replace(/<meta charset[^>]*>/i, (m) => `${m}\n  <script id="playground-prelude">{\n${script}}</script>`)
+    .replace(/\s*<link rel="stylesheet" href="\/shell\/shell\.css">/g, '')
+    .replace(/\s*<script type="module" src="\/shell\/app\.js"><\/script>/g, '')
+    // The prelude, then the shell (top bar, browser file storage: shell/), first in <head>, so
+    // playgroundFiles exists before the app's own scripts start it.
+    .replace(
+      /<meta charset[^>]*>/i,
+      (m) => `${m}\n  <script id="playground-prelude">{\n${script}}</script>\n  <link rel="stylesheet" href="/shell/shell.css">\n  <script type="module" src="/shell/app.js"></script>`,
+    )
   writeFileSync(page, html)
 
   // Workers that run the app (EffectCraft renders frames in some) get lazy-pipelines.js too.
@@ -52,13 +59,16 @@ const patch = (t, dir) => {
   }
 
   // EffectCraft's service worker precaches the .wasm by name and serves its cached index.html first: point
-  // it at the .wasm.gz, and tie its VERSION to the patched page so returning visitors pick up changes.
+  // it at the .wasm.gz, and tie its VERSION to the patched page and to everything in shell/ (the worker
+  // serves /shell/* cache-first too), so returning visitors pick up changes.
   const sw = join(dir, 'sw.js')
   if (existsSync(sw)) {
-    const hash = createHash('sha256').update(html).digest('hex').slice(0, 8)
+    const hash = createHash('sha256').update(html)
+    for (const f of readdirSync('shell').sort()) hash.update(readFileSync(join('shell', f)))
+    const version = hash.digest('hex').slice(0, 8)
     const code = readFileSync(sw, 'utf8')
       .replaceAll('.wasm"', '.wasm.gz"')
-      .replace(/(const VERSION = "[^"-]+)(-[0-9a-f]+)?"/, `$1-${hash}"`)
+      .replace(/(const VERSION = "[^"-]+)(-[0-9a-f]+)?"/, `$1-${version}"`)
     writeFileSync(sw, code)
   }
 }
