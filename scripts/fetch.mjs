@@ -153,7 +153,7 @@ async function install(t, channel, name) {
   const builds = channelAssets(built, t, channel)
   const ours = builds.find((a) => a.name.startsWith(`${t.slug}-${release.tag_name}-`))
   // A build made here with build.mjs (out/<slug>-<tag>-<hash>.zip) wins, to try builds before CI publishes them.
-  const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort().at(-1)
+  const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort((a, b) => statSync(join('out', a)).mtimeMs - statSync(join('out', b)).mtimeMs).at(-1)
   const local = localZip && { name: localZip, path: join('out', localZip), updated_at: statSync(join('out', localZip)).mtime.toISOString(), size: statSync(join('out', localZip)).size }
   // The head channel has no upstream zip: until its newest commit is built, keep its newest earlier build;
   // one never built is left out (the dashboard doesn't list it).
