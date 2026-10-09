@@ -123,3 +123,9 @@ test('an app that reports its own state is warned about only when it has unsaved
   assert.equal(shown.type(), 'beforeunload')
   await shown.accept()
 })
+
+test('the bar’s Playground link carries the ArtCraft icon', async () => {
+  const page = await openPage(browser, `${site.url}${wordPath()}`)
+  const home = page.getByRole('link', { name: 'Playground' })
+  assert.equal(await home.locator('img').getAttribute('src'), '/shell/artcraft-icon.svg')
+})

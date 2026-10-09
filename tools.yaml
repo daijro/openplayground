@@ -11,7 +11,9 @@
 #   patches: source patches for the app's own build (optional; see scripts/build.mjs). Every app is built
 #           from source with a speed-first wasm-opt -O3; when its build is missing or failed, the site
 #           serves the upstream release (with the theme script) instead.
-#   opens:  file types (extensions) the app opens: the Files explorer shows its icon on them and opens them in it
+#   opens:  file types (extensions) the app is the natural home for: Files shows its icon on them and opens them
+#           in it by default (no browser-side Open yet: [])
+#   imports: other types its browser build takes in (imports, places, inserts): offered in Files' right-click menu
 #
 # Run `make fetch` after editing.
 
@@ -21,7 +23,8 @@ groups:
       - slug: photoshop
         name: Photoshop
         blurb: Layers, masks, adjustments, brushes and real PSD files.
-        opens: [psd, psb, pcraft, png, jpg, jpeg, webp, gif, bmp, tif, tiff]
+        opens: [psd, psb, psdt, pcraft, png, jpg, jpeg, webp, gif, bmp, tif, tiff, tga, ico, qoi, exr, hdr, heic, heif, afphoto]
+        imports: [dng, cr2, cr3, nef, nrw, arw, pef, orf, rw2, raf, svg, svgz, pbm, pgm, ppm, pam, pfm, abr, grd, aco, ase, afdesign, afpub]
         repo: storytold/photocraft
         icon: icons/photoshop.svg
         theme: themes/photoshop.js
@@ -31,7 +34,8 @@ groups:
       - slug: illustrator
         name: Illustrator
         blurb: Vector paths, type and artboards.
-        opens: [vectorcraft, ai, svg, eps]
+        opens: [vectorcraft, drawcraft, ai, ait, eps, svg, svgz, emf, wmf, afdesign]
+        imports: [pdf, png, jpg, jpeg, gif, webp, tif, tiff, bmp, dxf, txt, gpl, ase]
         repo: storytold/vectorcraft
         icon: icons/illustrator.svg
         theme: themes/illustrator.js
@@ -43,6 +47,7 @@ groups:
         name: InDesign
         blurb: Page layout and publishing.
         opens: [designcraft, idml]
+        imports: [png, jpg, jpeg, gif, webp, tif, tiff, bmp, psd, svg, pdf, ai, txt, docx, rtf, md, xlsx, ase]
         repo: storytold/designcraft
         icon: icons/indesign.svg
         theme: themes/indesign.js
@@ -53,7 +58,8 @@ groups:
       - slug: lightroom
         name: Lightroom
         blurb: Photo library and raw development.
-        opens: [dng, cr2, cr3, nef, arw, raf, orf, rw2]
+        opens: [dng, cr2, cr3, nef, nrw, arw, pef, orf, rw2, raf, rwl, raw, iiq, crw, mrw, x3f, kdc, mos, erf]
+        imports: [jpg, jpeg, png, tif, tiff, webp, psd, jxl, gif, bmp, heic, avif]
         repo: storytold/lightcraft
         icon: icons/lightroom.svg
         accent: "#31A8FF"
@@ -62,7 +68,8 @@ groups:
       - slug: premiere
         name: Premiere Pro
         blurb: Video editing, color and sound.
-        opens: [fcproj, mp4, mov, m4v, webm]
+        opens: [fcproj, mp4, m4v, mov, mkv, webm, avi, mxf, mts, m2ts, mpg, mpeg, 3gp]
+        imports: [wav, aif, aiff, mp3, m4a, aac, flac, ogg, opus, png, jpg, jpeg, gif, webp, tif, tiff, bmp, srt, vtt, scc, edl, fcpxml, otio, aaf, omf]
         repo: storytold/filmcraft
         icon: icons/premiere.svg
         theme: themes/premiere.js
@@ -72,7 +79,8 @@ groups:
       - slug: after-effects
         name: After Effects
         blurb: Compositions, keyframes, effects and expressions.
-        opens: [ecproj, ecprojx]
+        opens: [ecproj]
+        imports: [mp4, mov, m4v, mkv, webm, png, jpg, jpeg, gif, webp, tif, tiff, bmp, exr, wav, aif, aiff, mp3, flac, ogg, opus, svg, pdf, ai, eps, psd, psb, gltf, glb, obj, csv, tsv]
         repo: storytold/effectcraft
         icon: icons/after-effects.svg
         theme: themes/after-effects.js
@@ -84,6 +92,7 @@ groups:
         name: Acrobat Pro
         blurb: Read, organize, combine, split and secure PDFs.
         opens: [pdf]
+        imports: [png, jpg, jpeg, tif, tiff, gif, bmp, jp2, j2k, jpx, txt]
         repo: storytold/pdfcraft
         icon: icons/acrobat.svg
         theme: themes/acrobat.js
@@ -95,7 +104,8 @@ groups:
       - slug: word
         name: Word
         blurb: Writing and document design.
-        opens: [docx, docm, dotx, odt, rtf, txt, md]
+        opens: [docx, docm, dotx, dotm, odt, rtf, txt, md, html, htm]
+        imports: [png, jpg, jpeg, gif, webp, bmp]
         repo: storytold/wordcraft
         icon: icons/word.svg
         theme: themes/word.js
@@ -106,7 +116,8 @@ groups:
       - slug: excel
         name: Excel
         blurb: Spreadsheets and data.
-        opens: [xlsx, xlsm, csv, tsv]
+        opens: [xlsx, xlsm, xltx, xltm, csv, tsv]
+        imports: [txt, json, tab]
         repo: storytold/gridcraft
         icon: icons/excel.svg
         theme: themes/excel.js
@@ -118,6 +129,7 @@ groups:
         name: PowerPoint
         blurb: Presentations and slide shows.
         opens: [pptx, potx, ppsx, deckcraft]
+        imports: [png, jpg, jpeg, gif, webp, bmp, tif, tiff, wav, mp3, m4a, aac, flac, ogg, opus, aif, aiff, mp4, m4v, mov, webm, txt, md]
         repo: storytold/deckcraft
         icon: icons/powerpoint.svg
         theme: themes/powerpoint.js
@@ -130,7 +142,8 @@ groups:
       - slug: autocad
         name: AutoCAD
         blurb: Computer-aided design and drafting.
-        opens: [dxf, dwg]
+        opens: []
+        imports: []
         repo: storytold/cadcraft
         icon: icons/autocad.svg
         accent: "#E85984"
@@ -139,7 +152,8 @@ groups:
       - slug: pro-tools
         name: Pro Tools
         blurb: Recording, editing and mixing audio.
-        opens: [scraft, wav, mp3, flac, ogg, aif, aiff, m4a]
+        opens: []
+        imports: []
         repo: storytold/soundcraft
         branch: main
         # The web app and the crates it compiles (dependency changes show up in Cargo.lock): CI, docs and

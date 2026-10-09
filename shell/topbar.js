@@ -19,7 +19,7 @@ export async function mountTopbar() {
   fullscreen.addEventListener('click', () => document.documentElement.requestFullscreen().catch(() => {}))
 
   // Everything that doesn't need apps.json goes up at once; the switcher and version join when the list arrives.
-  const home = h('a', { class: 'pg-home', href: '/' }, h('span', { class: 'pg-mark', 'aria-hidden': 'true' }), h('span', { class: 'pg-label' }, 'Playground'))
+  const home = h('a', { class: 'pg-home', href: '/' }, h('img', { class: 'pg-mark', src: '/shell/artcraft-icon.svg', alt: '' }), h('span', { class: 'pg-label' }, 'Playground'))
   const bar = isolate(
     h(
       'header',

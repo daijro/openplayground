@@ -2,7 +2,7 @@
 // Files popup in apps and the /files/ page; 'open' is an app's Open; 'save' is an app's Save As (step 2,
 // after files.js asks "Keep in browser storage / Download to device").
 import * as store from './store.js'
-import { ancestry, appFor, baseName, formatSize, formatWhen, join, matchesTypes, parentOf, uniqueName, validName, withType } from './paths.js'
+import { ancestry, appFor, appsFor, baseName, formatSize, formatWhen, join, matchesTypes, parentOf, uniqueName, validName, withType } from './paths.js'
 import { confirmIn, download, h, icon } from './ui.js'
 
 const DRAG = 'application/x-playground-path'
@@ -266,14 +266,12 @@ export function explorer({ mode = 'browse', types = [], name = '', apps = [], cl
   // Browse mode's row menu, at viewport point (x, y).
   function menu(entry, x, y) {
     root.querySelector('.pg-menu')?.remove()
-    const app = entry.kind === 'file' ? appFor(apps, entry.name) : null
-    const item = (label, run) => h('button', { class: 'pg-menu-item', role: 'menuitem', type: 'button', onclick: () => (close(), run()) }, label)
-    const items = [
-      entry.kind === 'folder' ? item('Open', () => go(entry.path)) : app && item(`Open in ${app.name}`, () => onOpenInApp(entry.path, app)),
-      entry.kind === 'file' && item('Download', () => downloadEntry(entry)),
-      item('Rename', () => rename(entry)),
-      item('Delete', () => remove(entry)),
-    ].filter(Boolean)
+    const item = (label, run, iconSrc) =>
+      h('button', { class: 'pg-menu-item', role: 'menuitem', type: 'button', onclick: () => (close(), run()) }, iconSrc ? h('img', { src: iconSrc, alt: '' }) : null, label)
+    // A file: every app that opens its type (the default first), then the file actions.
+    const openers = entry.kind === 'file' ? appsFor(apps, entry.name).map((app) => item(`Open in ${app.name}`, () => onOpenInApp(entry.path, app), app.icon)) : [item('Open', () => go(entry.path))]
+    const actions = [entry.kind === 'file' && item('Download', () => downloadEntry(entry)), item('Rename', () => rename(entry)), item('Delete', () => remove(entry))].filter(Boolean)
+    const items = [...openers, ...actions]
     const el = h(
       'div',
       {
@@ -287,7 +285,9 @@ export function explorer({ mode = 'browse', types = [], name = '', apps = [], cl
           list.focus()
         },
       },
-      items,
+      openers,
+      openers.length ? h('div', { class: 'pg-menu-sep', role: 'separator' }) : null,
+      actions,
     )
     const outside = (e) => !el.contains(e.target) && close()
     const close = () => {

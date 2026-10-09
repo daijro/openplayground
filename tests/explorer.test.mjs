@@ -120,3 +120,17 @@ test('dropping a file on the explorer header uploads it to the current folder', 
   await page.locator('.pg-ex-head').dispatchEvent('drop', { dataTransfer })
   await until(() => stat(page, '/header-drop.txt'), 5000, 'the upload')
 })
+
+test('right-clicking a file offers every app that opens its type, each with its icon', async () => {
+  const page = await openPage(browser, `${site.url}/files/`)
+  const apps = (await (await fetch(`${site.url}/shell/apps.json`)).json()).groups.flatMap((g) => g.apps)
+  const expected = [...apps.filter((a) => a.opens.includes('png')), ...apps.filter((a) => !a.opens.includes('png') && a.imports.includes('png'))]
+  assert.ok(expected.length >= 2, 'several apps open .png')
+  await page.evaluate(async () => (await import('/shell/store.js')).write('/shot.png', new Uint8Array([1])))
+  await page.reload()
+  await row(page, 'shot.png').click({ button: 'right' })
+  const items = page.getByRole('menuitem', { name: /^Open in / })
+  assert.deepEqual(await items.allTextContents(), expected.map((a) => `Open in ${a.name}`))
+  for (let i = 0; i < expected.length; i++) assert.equal(await items.nth(i).locator('img').getAttribute('src'), expected[i].icon)
+  await page.getByRole('menuitem', { name: 'Download' }).waitFor()
+})

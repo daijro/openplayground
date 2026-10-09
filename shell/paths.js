@@ -69,5 +69,12 @@ export const formatWhen = (ms, now = Date.now()) => {
   return (new Date(ms).getUTCFullYear() === new Date(now).getUTCFullYear() ? thisYear : otherYear).format(ms)
 }
 
-/** The app (from /shell/apps.json) that opens a file of this name, or null. */
-export const appFor = (apps, name) => apps.find((app) => app.opens?.includes(extOf(name))) ?? null
+/** Every app (from /shell/apps.json) that takes a file of this name: the ones it's native to (`opens`) first, then
+ *  the ones that import or place it (`imports`), each in the dashboard's order. */
+export const appsFor = (apps, name) => {
+  const ext = extOf(name)
+  const native = apps.filter((app) => app.opens?.includes(ext))
+  return [...native, ...apps.filter((app) => !native.includes(app) && app.imports?.includes(ext))]
+}
+/** The app a file of this name opens in by default (its icon, double-click): the first that opens it, or null. */
+export const appFor = (apps, name) => appsFor(apps, name)[0] ?? null

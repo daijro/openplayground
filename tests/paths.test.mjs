@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  ancestry, appFor, baseName, extOf, formatSize, formatWhen, fromAppPath, join, matchesTypes, normalize,
+  ancestry, appFor, appsFor, baseName, extOf, formatSize, formatWhen, fromAppPath, join, matchesTypes, normalize,
   parentOf, toAppPath, uniqueName, validName, withType,
 } from '../shell/paths.js'
 
@@ -75,4 +75,17 @@ test('appFor picks the first app that opens the type', () => {
   assert.equal(appFor(apps, 'a.PNG').slug, 'photoshop')
   assert.equal(appFor(apps, 'a.docx').slug, 'word')
   assert.equal(appFor(apps, 'a.zip'), null)
+})
+
+test('appsFor lists the apps a type is native to first, then the ones that import it, each once', () => {
+  const apps = [
+    { slug: 'illustrator', opens: ['ai'], imports: ['pdf', 'png'] },
+    { slug: 'acrobat', opens: ['pdf'], imports: ['png'] },
+    { slug: 'photoshop', opens: ['png'], imports: [] },
+    { slug: 'excel', opens: ['xlsx'] },
+  ]
+  assert.deepEqual(appsFor(apps, 'doc.PDF').map((a) => a.slug), ['acrobat', 'illustrator'])
+  assert.deepEqual(appsFor(apps, 'shot.png').map((a) => a.slug), ['photoshop', 'illustrator', 'acrobat'])
+  assert.equal(appFor(apps, 'doc.pdf').slug, 'acrobat')
+  assert.deepEqual(appsFor(apps, 'a.zip'), [])
 })
