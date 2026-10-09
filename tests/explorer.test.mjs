@@ -41,10 +41,14 @@ test('new folder, upload, rename, move by dragging, delete', async () => {
   await page.getByLabel('New name for notes.txt').fill('todo.txt')
   await page.keyboard.press('Enter')
   await row(page, 'todo.txt').waitFor()
+  await page.waitForTimeout(300)
+  assert.equal(await page.locator('.pg-ex-status.pg-error').count(), 0, 'a successful rename shows no error')
 
   await row(page, 'todo.txt').dragTo(row(page, 'Reports'))
   await until(() => stat(page, '/Reports/todo.txt'), 5000, 'the move')
   assert.equal(await stat(page, '/todo.txt'), null)
+  await page.waitForTimeout(300)
+  assert.equal(await page.locator('.pg-ex-status.pg-error').count(), 0, 'a successful move shows no error')
 
   await row(page, 'Reports').dblclick()
   await page.getByRole('button', { name: 'Reports' }).waitFor() // breadcrumb
@@ -100,4 +104,17 @@ test('dropping files from the computer uploads them', async () => {
   await page.locator('.pg-ex-list').dispatchEvent('dragover', { dataTransfer })
   await page.locator('.pg-ex-list').dispatchEvent('drop', { dataTransfer })
   await until(() => stat(page, '/dropped.txt'), 5000, 'the upload')
+})
+
+test('dropping a file on the explorer header uploads it to the current folder', async () => {
+  const page = await openPage(browser, `${site.url}/files/`)
+  await page.getByRole('listbox', { name: 'Files' }).waitFor()
+  const dataTransfer = await page.evaluateHandle(() => {
+    const dt = new DataTransfer()
+    dt.items.add(new File(['xyz'], 'header-drop.txt', { type: 'text/plain' }))
+    return dt
+  })
+  await page.locator('.pg-ex-head').dispatchEvent('dragover', { dataTransfer })
+  await page.locator('.pg-ex-head').dispatchEvent('drop', { dataTransfer })
+  await until(() => stat(page, '/header-drop.txt'), 5000, 'the upload')
 })

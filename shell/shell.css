@@ -121,7 +121,7 @@ body > canvas:first-of-type {
 .pg-sep { color: var(--pg-muted); }
 .pg-ex-tools { display: flex; gap: 8px; }
 .pg-ex-list { flex: 1; min-height: 160px; overflow: auto; padding: 6px; outline: none; }
-.pg-ex-list.pg-drop { box-shadow: inset 0 0 0 2px var(--pg-accent); }
+.pg-explorer.pg-drop { box-shadow: inset 0 0 0 2px var(--pg-accent); }
 .pg-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 84px 110px 32px; align-items: center; gap: 10px; height: 38px; padding: 0 8px; border-radius: 8px; cursor: default; }
 .pg-explorer:not([data-mode="browse"]) .pg-row { grid-template-columns: 24px minmax(0, 1fr) 84px 110px; }
 .pg-row:hover { background: var(--pg-raised); }

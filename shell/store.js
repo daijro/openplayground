@@ -45,7 +45,13 @@ export const list = async (path) => {
     if (handle.kind === 'directory') {
       entries.push({ name, path: join(path, name), kind: 'folder' })
     } else {
-      const file = await handle.getFile()
+      let file
+      try {
+        file = await handle.getFile()
+      } catch (e) {
+        if (e.name === 'NotFoundError') continue // removed while listing (e.g. the source of a move)
+        throw e
+      }
       entries.push({ name, path: join(path, name), kind: 'file', size: file.size, modified: file.lastModified })
     }
   }

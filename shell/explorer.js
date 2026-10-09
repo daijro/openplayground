@@ -124,16 +124,21 @@ export function explorer({ mode = 'browse', types = [], name = '', apps = [], cl
   const visible = () => entries.filter((e) => e.kind === 'folder' || mode !== 'open' || allTypes || matchesTypes(e.name, types))
   const selectedFile = () => entries.find((e) => e.path === selected && e.kind === 'file')
 
-  async function go(path) {
+  let seq = 0
+  async function go(path, startup = false) {
+    const mine = ++seq
     try {
-      entries = await store.list(path)
+      const listed = await store.list(path)
+      if (mine !== seq) return // superseded by a newer go()
+      entries = listed
       if (path !== dir) setStatus('')
       dir = path
       remember(dir)
       if (!entries.some((e) => e.path === selected)) selected = null
       render()
     } catch (e) {
-      if (path !== '/') return go('/') // the remembered folder is gone
+      if (mine !== seq) return
+      if (startup && path !== '/') return go('/') // the remembered folder is gone
       showError(e)
     }
   }
@@ -329,12 +334,21 @@ export function explorer({ mode = 'browse', types = [], name = '', apps = [], cl
   async function upload(files, into) {
     if (!files.length) return
     const taken = new Set((into === dir ? entries : await store.list(into)).map((e) => e.name))
+    let done = 0
+    let failure
     for (const file of files) {
       const fileName = uniqueName(file.name, taken)
       taken.add(fileName)
-      await guard(() => store.write(join(into, fileName), file))
+      try {
+        await store.write(join(into, fileName), file)
+        done++
+      } catch (e) {
+        console.error(e)
+        failure ??= e
+      }
     }
-    setStatus(`Uploaded ${files.length === 1 ? files[0].name : `${files.length} files`}.`)
+    if (failure) showError(new Error(`Uploaded ${done} of ${files.length} files: ${failure.message ?? failure}`))
+    else setStatus(`Uploaded ${files.length === 1 ? files[0].name : `${files.length} files`}.`)
   }
 
   const downloadEntry = (entry) => guard(async () => download(entry.name, await store.read(entry.path)))
@@ -415,11 +429,11 @@ export function explorer({ mode = 'browse', types = [], name = '', apps = [], cl
       if (from !== into && parentOf(from) !== into) guard(() => store.move(from, join(into, baseName(from))))
     })
   }
-  dropTarget(list, () => dir)
+  dropTarget(root, () => dir)
 
   const unsubscribe = store.onChange((changed) => changed === dir && go(dir))
   const ready = store.available().then((ok) => {
-    if (ok) return go(remembered() ?? '/')
+    if (ok) return go(remembered() ?? '/', true)
     head.hidden = true
     list.replaceChildren(h('p', { class: 'pg-ex-empty' }, 'Browser storage isn’t available in this window (for example, a private window).'))
   })
