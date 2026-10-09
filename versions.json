@@ -23,5 +23,6 @@
   "autocad@head": "head-86f3199+cc375ec6",
   "fusion-360": "v0.1.0",
   "pro-tools": "v0.3.0+cc375ec6",
-  "pro-tools@head": "head-c51e5d5+cc375ec6"
+  "pro-tools@head": "head-c51e5d5+cc375ec6",
+  "artcraft-store": "368f3cc"
 }
