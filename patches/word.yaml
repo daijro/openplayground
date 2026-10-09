@@ -48,10 +48,11 @@
 #   `browser:` path goes to the engine's own `file.save {path}`, which serializes, writes through
 #   io::save_path → WEB_WRITE (rule 3), and sets the document's path and saved state. Otherwise
 #   save_as_async (rule 1) gets the name and docx bytes. Save As from the UI (save_as_dialog: pick_save
-#   returns the bare name on the web, then `file.save {path: name}`) lands here too. Exports
-#   (file.exportPdf/exportPng) are left to the download branch on purpose.
+#   returns the bare name on the web, then `file.save {path: name}`) lands here too. Exports stay plain
+#   downloads on purpose: `file.saveAs` with a non-browser path (File > Export / Print call it with
+#   "<name>.pdf|odt|html…") and file.exportPdf/exportPng fall through to the download branch.
 # Verify: new document → type → Ctrl+S → the Keep/Download dialog; Keep → name → Save; type, Ctrl+S → no
-#   dialog, and the file's time in Files changes.
+#   dialog, and the file's time in Files changes. File → Export → PDF downloads a .pdf with no dialog.
 # If upstream changes: anchor on whatever handles file.save / file.saveAs in the web build before it
 #   downloads.
 - file: crates/ui-egui/src/lib.rs
@@ -59,7 +60,8 @@
   before: |
     // playground (patches/word.yaml): Save / Save As against browser storage, before the download branch.
             if let Some(ask) = &self.services.save_as_async
-                && matches!(id, "file.save" | "file.saveAs")
+                && (id == "file.save"
+                    || (id == "file.saveAs" && params.get("path").and_then(Value::as_str).is_none_or(|p| p.starts_with("browser:"))))
             {
                 let path = params.get("path").and_then(Value::as_str).map(str::to_string).or_else(|| {
                     if id == "file.save" { self.session.path.as_ref().map(|p| p.to_string_lossy().to_string()) } else { None }

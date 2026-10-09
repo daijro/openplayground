@@ -75,6 +75,19 @@ async function roundTrip(slug, { edit, savedAs, autosave }) {
   assert.match(download.suggestedFilename(), new RegExp(`\\.${savedAs.split('.').pop()}$`))
 }
 
+// Exports are plain downloads, not Save As: File → Export → PDF downloads a .pdf and opens no shell dialog.
+// (Driven through the UI: the app's commands aren't reachable from the page. Coordinates: File tab, Export, PDF.)
+test('Word: File → Export → PDF is a plain download', { skip: !E2E }, async () => {
+  const page = await appPage('word', { context: await browser.newContext({ acceptDownloads: true, colorScheme: 'light' }) })
+  await page.mouse.click(27, 89)
+  await page.waitForTimeout(600)
+  await page.mouse.click(44, 412)
+  await page.waitForTimeout(600)
+  const [download] = await Promise.all([page.waitForEvent('download', { timeout: 15_000 }), page.mouse.click(400, 165)])
+  assert.match(download.suggestedFilename(), /\.pdf$/)
+  assert.equal(await dialogs(page), 0, 'Export opened a shell dialog')
+})
+
 test('Word: Save As, Save, AutoSave, Open and Download', { skip: !E2E }, () =>
   roundTrip('word', {
     savedAs: 'E2E Word.docx',
