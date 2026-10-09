@@ -85,6 +85,8 @@ const prepare = async (slug, channel, { dir = 'src', patch = true } = {}) => {
   const t = toolFor(slug)
   const { release } = (await resolveVersion(t, channel)) ?? fail(`${slug} has no ${channel} version`)
   const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, `${slug}-${channel}`) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
+  // A throwaway temp dir (1-2 GB of target/) goes when we're done, pass or fail; BUILD_DIR is kept as a cache.
+  if (!process.env.BUILD_DIR) process.on('exit', () => rmSync(work, { recursive: true, force: true }))
   const src = join(work, dir)
   rmSync(src, { recursive: true, force: true })
   mkdirSync(join(work, '.cargo'), { recursive: true })
