@@ -168,3 +168,87 @@ test('Excel: two stored workbooks stay separate; reopening one switches to it', 
   assert.equal((await stat(page, '/Sheet B.xlsx')).modified, b2.modified, 'saving A changed B')
   assert.equal(await dialogs(page), 0)
 })
+
+test('PowerPoint: Save As, Save, Open and Download', { skip: !E2E }, () =>
+  roundTrip('powerpoint', {
+    savedAs: 'E2E Deck.deckcraft',
+    autosave: false, // PowerPoint has no AutoSave
+    edit: async (page) => {
+      // Saving writes even without changes (save() saves whenever the deck has a path); just focus the app.
+      await page.mouse.click(700, 450)
+    },
+  }))
+
+// Exports are plain downloads, not Save As: Export… (PDF) downloads a .pdf and opens no shell dialog.
+// (Driven through the UI: the command palette's second "Export…" is the dialog; its Export button is at 774,474.)
+test('PowerPoint: Export is a plain download', { skip: !E2E }, async () => {
+  const page = await appPage('powerpoint', { query: '?webgl', context: await browser.newContext({ acceptDownloads: true, colorScheme: 'light' }) })
+  await page.mouse.click(1258, 54)
+  await page.waitForTimeout(500)
+  await page.keyboard.type('export')
+  await page.waitForTimeout(500)
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(800)
+  const [download] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.mouse.click(774, 474)])
+  assert.match(download.suggestedFilename(), /\.pdf$/)
+  assert.equal(await dialogs(page), 0, 'Export opened a shell dialog')
+})
+
+// Two stored decks save to their own files, and opening one that's already open switches to it instead of
+// opening a second copy bound to the same file. (?webgl: the canvas is compared as pixels; the open deck has
+// an unsaved extra slide, which a second copy read from storage wouldn't.)
+test('PowerPoint: two stored decks stay separate; reopening one switches to it', { skip: !E2E }, async () => {
+  const page = await appPage('powerpoint', { query: '?webgl' })
+  const shot = async () => {
+    await page.mouse.move(700, 670) // off the ribbon: no hover highlight in the pixels
+    await page.waitForTimeout(300)
+    return page.screenshot({ clip: { x: 0, y: 36, width: 1280, height: 654 } })
+  }
+  const keep = async (name) => {
+    await page.keyboard.press('Control+s')
+    await page.getByRole('button', { name: /Keep in browser storage/ }).click()
+    await page.getByLabel('File name').fill(name)
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await until(() => stat(page, `/${name}.deckcraft`), 15_000, `${name}.deckcraft`)
+    await page.waitForTimeout(1000) // the background write settles
+    return stat(page, `/${name}.deckcraft`)
+  }
+  const openStored = async (name) => {
+    await page.keyboard.press('Control+o')
+    await page.getByRole('option', { name: new RegExp(`^${name}\\.deckcraft`) }).dblclick()
+    await page.locator('dialog.pg-modal').waitFor({ state: 'detached' })
+    await page.waitForTimeout(1000)
+  }
+  const saved = async (name, before) => {
+    await page.keyboard.press('Control+s')
+    await until(async () => (await stat(page, `/${name}.deckcraft`)).modified > before.modified, 15_000, `${name} to change`)
+    await page.waitForTimeout(1000)
+    return stat(page, `/${name}.deckcraft`)
+  }
+  const newSlide = async () => {
+    await page.mouse.click(168, 128)
+    await page.waitForTimeout(500)
+  }
+
+  const a = await keep('Deck A') // the sample deck
+  await page.mouse.click(21, 54) // a new, blank deck
+  await page.waitForTimeout(800)
+  const b = await keep('Deck B')
+
+  await openStored('Deck A') // switches to the open Deck A
+  await newSlide() // unsaved
+  const dirtyA = await shot()
+  await openStored('Deck B')
+  assert.ok(!(await shot()).equals(dirtyA), 'the decks should look different (is the canvas rendering?)')
+  await newSlide()
+  const b2 = await saved('Deck B', b)
+  assert.equal((await stat(page, '/Deck A.deckcraft')).modified, a.modified, 'saving B changed A')
+
+  // Opening A again switches to the open A (still showing its unsaved slide), not a fresh copy of the stored file.
+  await openStored('Deck A')
+  assert.ok((await shot()).equals(dirtyA), 'a second copy of A was opened') // (equals, not deepEqual: a failing deepEqual of two PNGs hangs printing the diff)
+  await saved('Deck A', a)
+  assert.equal((await stat(page, '/Deck B.deckcraft')).modified, b2.modified, 'saving A changed B')
+  assert.equal(await dialogs(page), 0)
+})
