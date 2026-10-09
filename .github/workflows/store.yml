@@ -1,0 +1,142 @@
+name: Build store plug-ins
+
+# Builds the community plug-ins of the ArtCraft Store (github.com/akkk09/artcraft-store, its main branch) for
+# the apps in tools.yaml into artcraft-store-<commit>.zip on the `builds` release: their .wasm files and an
+# index.json [{id, name, version, author, description, kind, app, file}]. fetch.yml then puts each app's into
+# its plugins/ folder (scripts/fetch.mjs) and the app's patches load them (patches/photoshop.yaml).
+#
+# The store's code (cargo build scripts and macros included) runs only in the `build` job, inside a
+# container: the job has a read-only token and no secrets, and the container can't reach the runner (whose
+# own processes hold the job's artifact and cache token). `publish`, which can write releases, never runs it:
+# it checks and zips the files `build` made. When the store hasn't changed, a run costs one API call.
+on:
+  schedule:
+    - cron: '12,27,42,57 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/store.yml]
+
+concurrency:
+  group: store
+
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      apps: ${{ steps.plan.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools.yaml
+          sparse-checkout-cone-mode: false
+      # The store's newest commit from git (no API call), then whether its build is published (one call).
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git ls-remote https://github.com/akkk09/artcraft-store refs/heads/main | cut -f1)
+          [ -n "$sha" ]
+          if gh release view builds -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx "artcraft-store-${sha::7}.zip"; then
+            echo "artcraft-store-${sha::7}.zip is published already"
+          else
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            # The catalog `app`s we host: the repo names in tools.yaml (storytold/photocraft: photocraft).
+            echo "apps=$(sed -nE 's/^ *repo: [^/ ]+\/([A-Za-z0-9._-]+).*/\1/p' tools.yaml | jq -Rsc 'split("\n") - [""]')" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Runs the store's code. No secrets, a read-only token, nothing in env; the store is fetched without a token.
+  build:
+    needs: plan
+    if: needs.plan.outputs.sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      SHA: ${{ needs.plan.outputs.sha }}
+      APPS: ${{ needs.plan.outputs.apps }}
+    steps:
+      - name: Fetch the store
+        run: |
+          git init -q store
+          git -C store fetch -q --depth 1 https://github.com/akkk09/artcraft-store "$SHA"
+          git -C store checkout -q FETCH_HEAD
+      - name: Get a Rust toolchain for wasm32
+        run: |
+          docker run --name rust-wasm rust:1-slim rustup target add wasm32-unknown-unknown
+          docker commit rust-wasm rust-wasm
+      # Each catalog plug-in for an app we host, built in the container with only the store mounted. One that
+      # fails is skipped and listed in the job summary. Nothing here runs or trusts what the build leaves in
+      # store/ beyond reading the built .wasm (inside store/, no symlinks out); the catalog is read before.
+      - name: Build the plug-ins
+        run: |
+          jq -c --argjson apps "$APPS" '[.plugins[]? | select(.app as $a | $apps | index($a))]' store/catalog.json > "$RUNNER_TEMP/listed.json"
+          mkdir out
+          echo '[]' > "$RUNNER_TEMP/index.json"
+          echo "### ArtCraft Store ${SHA::7}" >> "$GITHUB_STEP_SUMMARY"
+          while read -r p; do
+            name=$(jq -r '.name // .id' <<<"$p") source=$(jq -r '.source // ""' <<<"$p") file=$(jq -r '.artifact // ""' <<<"$p")
+            if ! [[ $source =~ ^plugins/[A-Za-z0-9_][A-Za-z0-9._-]*$ && $file =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*\.wasm$ ]] || [ -e "out/$file" ]; then
+              echo "- **$name**: skipped: not a cargo crate in plugins/ building a .wasm \`artifact\` (\`$source\`, \`$file\`), or a duplicate" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            built=
+            if timeout 600 docker run --rm --security-opt no-new-privileges -v "$PWD/store:/store" -w /store -e CARGO_TARGET_DIR=/store/.build \
+                rust-wasm cargo build --manifest-path "$source/Cargo.toml" --release --target wasm32-unknown-unknown </dev/null; then
+              built=$(realpath -e "store/.build/wasm32-unknown-unknown/release/$file" 2>/dev/null) || true
+            fi
+            if [[ $built == "$PWD/store/"* && -f $built ]]; then
+              cp "$built" "out/$file"
+              jq --argjson p "$p" --arg file "$file" '. + [$p | {id, name, version, author, description, kind, app, file: $file}]' "$RUNNER_TEMP/index.json" > "$RUNNER_TEMP/next.json"
+              mv "$RUNNER_TEMP/next.json" "$RUNNER_TEMP/index.json"
+              echo "- **$name**: built $file ($(stat -c %s "out/$file") bytes)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- **$name**: :warning: failed to build, skipped (see the log)" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::$name ($source) failed to build; skipped"
+            fi
+          done < <(jq -c '.[]' "$RUNNER_TEMP/listed.json")
+          cp "$RUNNER_TEMP/index.json" out/index.json
+          # Nothing built of what the catalog lists is more likely a broken toolchain than broken plug-ins:
+          # publish nothing and try again next run, rather than empty every app's plug-ins.
+          [ "$(jq length out/index.json)" -gt 0 ] || [ "$(jq length "$RUNNER_TEMP/listed.json")" -eq 0 ]
+      - uses: actions/upload-artifact@v7
+        with:
+          name: store-plugins
+          path: out/
+          if-no-files-found: error
+
+  # Publishes what `build` made, running none of it.
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload to the builds release
+      actions: write # start fetch.yml
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: store-plugins
+          path: plugins
+      - name: Check, zip and publish, deleting older store builds
+        working-directory: plugins
+        run: |
+          zip="artcraft-store-${SHA::7}.zip"
+          # Only index.json and the plainly named, regular .wasm files it lists.
+          jq -e 'type == "array" and all(.[]; .file | type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9._-]*\\.wasm$"))' index.json > /dev/null
+          files=$(jq -r '.[].file' index.json)
+          [ "$(find . -mindepth 1 -printf '%y %P\n' | sort)" = "$(printf 'f %s\n' index.json $files | sort -u)" ] || { echo "unexpected files:"; ls -lA; exit 1; }
+          zip -qX "../$zip" index.json $files
+          gh release upload builds "../$zip" --clobber
+          gh release view builds --json assets -q '.assets[].name' | grep -E '^artcraft-store-[0-9a-f]+\.zip$' | grep -vx "$zip" | xargs -r -n1 gh release delete-asset builds -y
+          # Install them now rather than at fetch.yml's next scheduled run.
+          gh workflow run fetch.yml

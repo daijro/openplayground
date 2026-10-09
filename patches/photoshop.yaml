@@ -1,0 +1,100 @@
+# ══ Community plug-ins ══════════════════════════════════════════════════════════════════════════════════
+# Rules 1–3 load the community filter plug-ins openplayground bundles with Photoshop. The site builds the
+# store's plug-ins (github.com/akkk09/artcraft-store, .github/workflows/store.yml in
+# github.com/daijro/openplayground) and scripts/fetch.mjs puts this app's into plugins/ next to its page:
+#   plugins/index.json   [{id, name, version, author, description, kind, app, file}]
+#   plugins/<file>       the .wasm module (PhotoCraft's sandboxed plug-in ABI)
+# PhotoCraft's browser build can't load a plug-ins folder (plugin_cmds.rs: desktop only), so the web crate
+# fetches them at startup and installs them into the process-wide registry; they then show up under
+# Filter › Plug-ins like any installed plug-in. The browser console says what happened to each.
+# Delete these rules if PhotoCraft gains its own way to load web plug-ins (a web plug-ins folder, a URL list
+# in the preferences, …), and point fetch.mjs at whatever that reads.
+
+# Rule 1/3: the web crate may use the plug-in registry.
+# What it's for: rule 3 calls photocraft_plugins::registry::install_bytes. Nothing the web crate depends on
+#   re-exports photocraft-plugins (the engine and ui-egui use it privately), and the engine's own
+#   `plugin.install {data}` route would need serde_json and a base64 encoder, which the web crate lacks too.
+# How: the workspace's own crate, already compiled into the app through the engine; Cargo adds one line to
+#   Cargo.lock (photocraft-web's dependency list) on the first build, which doesn't pass --locked.
+# Verify: `node scripts/build.mjs check photoshop release` (and head) compiles.
+# If upstream changes: if the engine or ui-egui starts re-exporting photocraft_plugins (or the web crate
+#   depends on it already), delete this rule and use that path in rule 3.
+- file: apps/*-web/Cargo.toml
+  find: '^\[dependencies\]$'
+  after: "\nphotocraft-plugins = { workspace = true }"
+
+# Rule 2/3: start loading the plug-ins at startup.
+# What it's for: the plug-ins are in the Filter menu by the time the user gets to it.
+# How: right after the logger is set up in web::start, so the log lines show; the fetch runs in the
+#   background (rule 3), alongside the app's own start-up, and the registry is process-wide, so it doesn't
+#   matter which finishes first: the menus list the registry each time they're built.
+# Verify: the browser console shows "playground: installed plug-in …" lines; Filter › Plug-ins lists them.
+# If upstream changes: anchor on whatever runs first in the web crate's start function.
+- file: apps/*-web/src/web.rs
+  find: 'eframe::WebLogger::init\([^;]*;'
+  after: "\n    playground_plugins::load(); // playground (patches/photoshop.yaml): community plug-ins"
+
+# Rule 3/3: fetch plugins/index.json and install the plug-ins it lists.
+# What it's for: rules 1 and 2; this is the only code that talks to the page.
+# How: window.fetch through js_sys::Reflect (like patches/word.yaml's bridge, so no new web-sys features),
+#   relative to the page, so /photoshop/ and /head/photoshop/ each get their own channel's plugins/. Each
+#   module goes to registry::install_bytes, which validates it (ABI version, manifest, limits) in the
+#   wasmi sandbox; one console line per plug-in says it was installed, or why not. No index.json (a 404,
+#   or an HTML fallback page that isn't JSON): nothing happens and nothing is logged.
+# Verify: serve the build with a plugins/ folder (see scripts/fetch.mjs): the console logs
+#   "playground: installed plug-in Smudge Blend 0.1.0 (photocraft_plugin_smudge_blend.wasm)" and the like,
+#   Filter › Plug-ins lists them, and one runs on a pixel layer. Without plugins/ the console has no
+#   "playground:" plug-in lines and the menu has only "Install Plug-in…".
+# If upstream changes: this is self-contained; keep it at the end of the web crate's main file and follow
+#   renames of registry::install_bytes / Plugin::manifest.
+- file: apps/*-web/src/web.rs
+  find: '$(?![\s\S])'
+  before: |
+
+    /// playground (patches/photoshop.yaml): the community plug-ins openplayground serves next to the page
+    /// (plugins/index.json and the .wasm files it lists), installed into PhotoCraft's plug-in registry.
+    mod playground_plugins {
+        use js_sys::{Array, Function, Promise, Reflect, Uint8Array};
+        use wasm_bindgen::{JsCast as _, JsValue};
+
+        /// Installs every plug-in plugins/index.json lists, in the background, logging one line each. Without
+        /// the index (a page not served by openplayground, or an app with no plug-ins) it does nothing.
+        pub fn load() {
+            wasm_bindgen_futures::spawn_local(async {
+                let Ok(index) = get("plugins/index.json", "json").await else { return };
+                if !Array::is_array(&index) {
+                    log::warn!("playground: plugins/index.json isn't a list; no plug-ins installed");
+                    return;
+                }
+                for entry in Array::from(&index).iter() {
+                    let file = Reflect::get(&entry, &"file".into()).ok().and_then(|f| f.as_string()).unwrap_or_default();
+                    let installed = match get(&format!("plugins/{file}"), "arrayBuffer").await {
+                        Ok(buffer) => photocraft_plugins::registry::install_bytes(&Uint8Array::new(&buffer).to_vec()).map_err(|e| e.to_string()),
+                        Err(e) => Err(format!("couldn't download it ({})", e.as_string().unwrap_or_else(|| format!("{e:?}")))),
+                    };
+                    match installed {
+                        Ok(p) => log::info!("playground: installed plug-in {} {} ({file})", p.manifest().name, p.manifest().version),
+                        Err(e) => log::warn!("playground: plug-in {file} not installed: {e}"),
+                    }
+                }
+            });
+        }
+
+        /// `target[method](...args)`, awaited.
+        async fn call(target: &JsValue, method: &str, args: &Array) -> Result<JsValue, JsValue> {
+            let f: Function = Reflect::get(target, &method.into())?.dyn_into()?;
+            let promise: Promise = f.apply(target, args)?.dyn_into()?;
+            wasm_bindgen_futures::JsFuture::from(promise).await
+        }
+
+        /// GETs `url` (relative to the page) and reads the body with `read` ("json", "arrayBuffer"). A status
+        /// other than 2xx is an error.
+        async fn get(url: &str, read: &str) -> Result<JsValue, JsValue> {
+            let response = call(&js_sys::global(), "fetch", &Array::of1(&url.into())).await?;
+            if !Reflect::get(&response, &"ok".into())?.is_truthy() {
+                let status = Reflect::get(&response, &"status".into())?;
+                return Err(format!("HTTP {}", status.as_f64().unwrap_or_default()).into());
+            }
+            call(&response, read, &Array::new()).await
+        }
+    }

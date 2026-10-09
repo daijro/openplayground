@@ -28,6 +28,7 @@ groups:
         repo: storytold/photocraft
         icon: icons/photoshop.svg
         theme: themes/photoshop.js
+        patches: patches/photoshop.yaml
         accent: "#31A8FF"
         base: "#001E36"
 
