@@ -97,3 +97,15 @@ test('Word: Save As, Save, AutoSave, Open and Download', { skip: !E2E }, () =>
       await page.keyboard.type(' hello')
     },
   }))
+
+test('Excel: Save As, Save, Open and Download', { skip: !E2E }, () =>
+  roundTrip('excel', {
+    savedAs: 'E2E Book.xlsx',
+    autosave: false, // Excel's AutoSave is off by default; checked by hand
+    edit: async (page) => {
+      await page.mouse.click(320, 320)
+      await page.keyboard.type(String(Math.floor(Math.random() * 1000)))
+      await page.keyboard.press('Enter')
+      await page.waitForTimeout(500) // let the engine commit the edit before Ctrl+S
+    },
+  }))
