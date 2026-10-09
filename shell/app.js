@@ -1,7 +1,8 @@
 // The shell on an app page (fetch.mjs adds it to each installed app's index.html, before the app's own
-// scripts): the browser file storage API (files.js) the app's patches call, the top bar, and a warning
-// before leaving with work the app may not have saved.
+// scripts): the browser file storage API (files.js) and the installed fonts (fonts.js) the app's patches
+// call, the top bar, and a warning before leaving with work the app may not have saved.
 import { savedAt, unsavedReported } from './files.js'
+import './fonts.js'
 import { pendingWrites } from './store.js'
 import { barHidden, mountTopbar } from './topbar.js'
 
