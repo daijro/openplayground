@@ -1,0 +1,305 @@
+# ══ Stacked-video playback ══════════════════════════════════════════════════════════════════════════════
+# Rules 1–8 keep playback smooth with several 1080p videos stacked on the timeline (browser build:
+# apps/filmcraft-web/src/webcodecs.rs and crates/ui-egui/src/frames.rs). In the browser, decoded
+# pictures reach the app on the single UI thread, which also runs every frame job (FrameServer::pump).
+# Upstream v0.4.0 converts every picture the browser's VideoDecoder outputs to RGBA in the decoder's
+# output callback: drawImage onto an OffscreenCanvas, getImageData, a copy into wasm. That is 12–20 ms
+# per 1080p picture, for every layer, including pictures playback has already passed. Two layers
+# saturate the UI thread, and four or more collapse to about one frame per second. Three fixes:
+#   - Planes (rules 1 and 3): VideoFrame.copyTo straight into 8-bit Y'CbCr planes (PixelData::Yuv8,
+#     which the WebGPU compositor already uploads as three R8 textures and converts in its shader).
+#     About 3 ms per picture, and half the memory per cached frame. This is a backport: upstream main
+#     reads planes itself since 6893cb4 ("feed native YUV frames to the shared compositor", after
+#     v0.4.0; its `mod pixels`). The backport only runs where the output callback still converts
+#     synchronously through `to_rgba`, and compiles out on anything newer (rule 1's BACKPORT_PLANES).
+#   - Late pictures (rules 2–5, both channels): a picture playback has already passed is closed
+#     unconverted. The frame server already tells sources which pictures are late
+#     (filmcraft_media::cancel::catch_up, which FilmCraft's own decoders honour, Mp4Source::video_at);
+#     the WebCodecs source ignored it.
+#   - Thumbnails wait while playing (rules 6–8, both channels): a thumbnail job (Project panel, Media
+#     Browser, timeline) whose sources are busy with playback comes back pending and is run again on
+#     every UI frame. Each run renders all its layers on the CPU and throws the result away (up to 70%
+#     of the UI thread with 4 layers), and its requests pull the decode sessions away from the playhead.
+#     Edits re-render the sequence's own thumbnail, so this happens in normal use, not just after import.
+# Verify all: import 4 different 1080p H.264 MP4s, put them on V1–V4 of a new sequence and press Play
+#   right away. perf.stats `playback.shown` keeps growing (about 30 per second on a fast machine)
+#   instead of stalling near 1 per second. The project thumbnails fill in about half a second after
+#   Stop.
+
+# Rule 1/8: Y'CbCr planes instead of the canvas (backport of upstream main's `pixels::read`).
+# What it's for: a decoded picture costs about 3 ms of UI thread instead of 12–20, so more layers
+#   play in real time. Cached frames take half the memory (40 per source).
+# How: inserted before `impl Session`.
+#   - BACKPORT_PLANES is true only when the find's lookahead captured the synchronous
+#     `if let Some(f) = to_rgba(&frame)` of the output callback (v0.4.0). Elsewhere `$<sync>` is
+#     empty and rule 3's branch compiles out.
+#   - convert_later is called from the output callback (rule 3). It reads the planes in a spawned
+#     task, falls back to `to_rgba` for anything read_planes declines, then hands the picture to
+#     `out` as the old callback did.
+#   - out_max moves only once the picture is in `out`. A request for it in the meantime then still
+#     "covers" (want > out_max) and waits, instead of restarting the session. A restart while a copy
+#     is in flight (a seek mid-playback) can let that copy's late out_max cost one more restart. It
+#     never shows a wrong frame: every picture is filed under its own timestamp.
+#   - read_planes takes I420, NV12, I422 and I444 whose display size equals the visible rectangle,
+#     with a colour space named in WebCodecs terms (matrix, transfer, primaries, fullRange). Anything
+#     else (alpha, 10-bit, RGB, unknown colour, scaled display) returns None, so the canvas handles
+#     it as before. The track's display rotation is still applied afterwards in WcSource::collect.
+# Verify: play a stacked 1080p H.264 timeline with Chromium's counters, e.g. a wrapped
+#   VideoFrame.prototype.copyTo and OffscreenCanvasRenderingContext2D.prototype.getImageData. copyTo
+#   runs about once per picture and getImageData not at all. Colours match a build without this rule
+#   (SMPTE bars side by side).
+# If upstream changes: once the release has upstream's own plane reading (`mod pixels;` in
+#   webcodecs.rs, the output callback spawning `pixels::read`), BACKPORT_PLANES is false there too.
+#   Then delete this rule and rule 3's `if BACKPORT_PLANES` branch. If `impl Session` moves,
+#   anchor on any item boundary before the output callback; the lookahead only has to see the
+#   callback's synchronous `to_rgba` call.
+- file: apps/*-web/src/webcodecs.rs
+  find: '^impl Session \{(?:(?=[\s\S]*?(?<sync>if let Some\(f\) = to_rgba\(&frame\)))|)'
+  replace: |-
+    // playground (patches/premiere.yaml) ───────────────────────────────────────────────────────────────
+    /// Whether the output callback converts pictures synchronously through `to_rgba` (upstream
+    /// v0.4.0): the patch writes that call into the string when it finds it. Then the callback hands
+    /// pictures to `convert_later` (Y'CbCr planes); where upstream reads planes itself this is false.
+    const BACKPORT_PLANES: bool = !"$<sync>".is_empty();
+
+    /// Convert a decoded picture after the output callback returns: planes when `read_planes` takes
+    /// it, `to_rgba` otherwise. `out_max` moves only once the picture is in `out`, so a request for it
+    /// meanwhile keeps waiting rather than restarting the session.
+    fn convert_later(frame: JsValue, ts: i64, out: &Rc<RefCell<Vec<(i64, VideoFrame)>>>, out_max: &Rc<Cell<i64>>, last_output: &Rc<Cell<f64>>) {
+        let (out, out_max, last_output) = (out.clone(), out_max.clone(), last_output.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let f = match read_planes(&frame).await {
+                Some(f) => Some(f),
+                None => to_rgba(&frame),
+            };
+            let _ = call(&frame, "close", &[]);
+            if let Some(f) = f {
+                out.borrow_mut().push((ts, f));
+                DECODED.with(|c| c.set(c.get() + 1));
+            }
+            out_max.set(out_max.get().max(ts));
+            last_output.set(now_ms());
+            crate::repaint();
+        });
+    }
+
+    /// The picture as 8-bit Y'CbCr planes, read with `VideoFrame.copyTo`. None (the canvas then)
+    /// for other formats (alpha, high bit depth, RGB), a display size other than the visible
+    /// rectangle, or a colour space without a FilmCraft name.
+    async fn read_planes(frame: &JsValue) -> Option<VideoFrame> {
+        use filmcraft_color::{ColorInfo, Matrix, Primaries, Range, Transfer};
+        use filmcraft_frame::{Chroma, PixelData};
+        let (chroma, nv12) = match get(frame, "format").as_string()?.as_str() {
+            "I420" => (Chroma::C420, false),
+            "NV12" => (Chroma::C420, true),
+            "I422" => (Chroma::C422, false),
+            "I444" => (Chroma::C444, false),
+            _ => return None,
+        };
+        let rect = get(frame, "visibleRect");
+        let (w, h) = (get(&rect, "width").as_f64()?, get(&rect, "height").as_f64()?);
+        if w < 1.0 || h < 1.0 || get(frame, "displayWidth").as_f64() != Some(w) || get(frame, "displayHeight").as_f64() != Some(h) {
+            return None;
+        }
+        let (w, h) = (w as u32, h as u32);
+        let cs = get(frame, "colorSpace");
+        let name = |k: &str| get(&cs, k).as_string();
+        let color = ColorInfo {
+            matrix: match name("matrix")?.as_str() {
+                "bt709" => Matrix::Bt709,
+                "bt470bg" | "smpte170m" => Matrix::Bt601,
+                "bt2020-ncl" => Matrix::Bt2020Ncl,
+                _ => return None,
+            },
+            // the SDR video curves, as FilmCraft reads H.273 codes 1 and 6
+            transfer: match name("transfer")?.as_str() {
+                "bt709" | "smpte170m" => Transfer::Bt709,
+                "iec61966-2-1" => Transfer::Srgb,
+                _ => return None,
+            },
+            primaries: match name("primaries")?.as_str() {
+                "bt709" => Primaries::Bt709,
+                "bt470bg" => Primaries::Bt601_625,
+                "smpte170m" => Primaries::Bt601_525,
+                "bt2020" => Primaries::Bt2020,
+                "smpte432" => Primaries::P3D65,
+                _ => return None,
+            },
+            range: if get(&cs, "fullRange").as_bool()? { Range::Full } else { Range::Limited },
+        };
+        let opts = obj(&[("rect", rect)]);
+        let size = call(frame, "allocationSize", &[&opts]).ok()?.as_f64()?;
+        let raw = js_sys::Uint8Array::new_with_length(size as u32);
+        let copied = call(frame, "copyTo", &[raw.as_ref(), &opts]).ok()?.dyn_into::<js_sys::Promise>().ok()?;
+        let layout = js_sys::Array::from(&JsFuture::from(copied).await.ok()?);
+        // plane `i` of the layout, `pw` × `ph` bytes, without its row padding
+        let plane = |i: u32, pw: u32, ph: u32| -> Option<Vec<u8>> {
+            let l = layout.get(i);
+            let (offset, stride) = (get(&l, "offset").as_f64()? as u32, get(&l, "stride").as_f64()? as u32);
+            let end = offset.checked_add(stride.checked_mul(ph - 1)?)?.checked_add(pw)?;
+            if stride < pw || end > raw.length() {
+                return None;
+            }
+            let bytes = raw.subarray(offset, end).to_vec();
+            Some(if stride == pw { bytes } else { bytes.chunks(stride as usize).flat_map(|row| &row[..pw as usize]).copied().collect() })
+        };
+        let (sx, sy) = chroma.shifts();
+        let (cw, ch) = (w.div_ceil(1 << sx), h.div_ceil(1 << sy));
+        let y = plane(0, w, h)?;
+        let (u, v) = if nv12 {
+            let uv = plane(1, cw * 2, ch)?;
+            (uv.iter().step_by(2).copied().collect(), uv.iter().skip(1).step_by(2).copied().collect())
+        } else {
+            (plane(1, cw, ch)?, plane(2, cw, ch)?)
+        };
+        let data = PixelData::Yuv8 { planes: [Arc::new(y), Arc::new(u), Arc::new(v)], chroma, alpha: None };
+        Some(VideoFrame { width: w, height: h, data, color, par: (1, 1), pts: Tick::ZERO })
+    }
+
+    $&
+
+# Rule 2/8: each decode session's "late before" time.
+# What it's for: rule 3's output callback has to know which pictures playback has already passed.
+# How: an Rc<Cell<i64>> presentation time on Session (the struct holding one source's browser
+#   decoder). Rule 4 stores it and rule 3's callback holds a clone; rule 5 sets it on each request.
+#   i64::MIN means nothing is late.
+# Verify: rules 3–5 compile against it.
+# If upstream changes: keep it on whatever per-source state the output closure and
+#   WcSource::drive share (out, out_max and last_output live there).
+- file: apps/*-web/src/webcodecs.rs
+  find: 'struct Session \{'
+  after: |2-
+
+        /// playground (patches/premiere.yaml): pictures before this presentation time are late.
+        late_before: Rc<Cell<i64>>,
+
+# Rule 3/8: the output callback skips late pictures and, on v0.4.0, converts off the callback.
+# What it's for: a picture behind the playhead costs nothing, so layers that fall behind catch up
+#   instead of dragging playback down. On v0.4.0 the rest go through rule 1's planes.
+# How: the callback starts with these checks, right after it reads the picture's timestamp.
+#   - Late: if `ts` is below `late_before`, it closes the VideoFrame unconverted. It still advances
+#     out_max (the session did produce it, so a request for a later picture keeps feeding rather
+#     than restarting) and last_output (the session is alive).
+#   - Planes: with BACKPORT_PLANES (rule 1) it hands the picture to convert_later and returns.
+#     Upstream's own code below then only runs where the backport is compiled out.
+# Verify: during 8-layer playback, VideoFrame.close outruns VideoFrame.copyTo (head) or
+#   getImageData (v0.4.0 without rule 1). Scrub back over the passed frames: they decode again and
+#   show. A skipped picture that is asked for later restarts its session, as one the cache dropped
+#   did already.
+# If upstream changes: put the late check wherever the output callback gets the picture's
+#   timestamp, before any conversion or copy. Delete it if upstream's WebCodecs source starts
+#   reading filmcraft_media::cancel::catch_up itself.
+- file: apps/*-web/src/webcodecs.rs
+  find: 'let on_output = Closure::<dyn FnMut\(JsValue\)>::new\(move \|frame: JsValue\| \{\s*let ts = get\(&frame, "timestamp"\)[^;]*;'
+  replace: |2-
+    // playground (patches/premiere.yaml): see rule 5 (WcSource::drive) and the callback below.
+            let late_before = Rc::new(Cell::new(i64::MIN));
+            let late = late_before.clone();
+            $&
+                // playground (patches/premiere.yaml): a picture playback has already passed is closed
+                // unconverted; on v0.4.0 the others are converted off the callback (rule 1).
+                if ts < late.get() {
+                    let _ = call(&frame, "close", &[]);
+                    om.set(om.get().max(ts));
+                    lo.set(now_ms());
+                    crate::repaint();
+                    return;
+                }
+                if BACKPORT_PLANES {
+                    convert_later(frame, ts, &o, &om, &lo);
+                    return;
+                }
+
+# Rule 4/8: the session keeps its late_before.
+# What it's for: rule 5 sets it through the session (SESSIONS map), which the callback shares.
+# How: the Session literal in Session::new takes the `late_before` local from rule 3.
+# Verify: it compiles.
+# If upstream changes: follow Session's construction.
+- file: apps/*-web/src/webcodecs.rs
+  find: 'let s = Session \{'
+  after: |2-
+
+                late_before,
+
+# Rule 5/8: each request says which pictures are late.
+# What it's for: the frame server knows how far behind the playhead a picture stops being useful;
+#   this passes it to the decode session.
+# How: in WcSource::drive, once the session works towards this request (past the
+#   restart-or-wait decision, before feeding samples). late_before = the requested sample's time,
+#   minus filmcraft_media::cancel::catch_up() in track units (as Mp4Source::video_at reads it), minus
+#   one more sample duration.
+#   - Frame due now while playing forward: margin 0, so everything before it is late.
+#   - Playback prefetch: the distance back to the playhead.
+#   - Scrubbing: SCRUB_KEEP_S (2 s), so nearby frames stay decoded for scrubbing back.
+#   - Preroll, reverse play, thumbnails, exports: no margin, so nothing is late.
+#   - The extra sample: a prefetch request's nearest-sample rounding (media at another rate than
+#     the sequence) can land up to half a frame past the playhead's own sample. It must never make
+#     that sample late, because the last request to drive sets late_before.
+#   - A session busy with another request's picture returns before this, so its target is never
+#     declared late.
+# Verify: play a single clip: every frame shows (perf.stats playback.dropped stays 0). Pause and
+#   scrub: the frame under the playhead shows. Play 8 stacked layers: playback keeps moving instead
+#   of collapsing.
+# If upstream changes: place it where drive has committed the session to this request (after the
+#   `busy` early return), before the feeding loop.
+- file: apps/*-web/src/webcodecs.rs
+  find: 'let upto = \(i \+ LOOKAHEAD\)'
+  replace: |2-
+    // playground (patches/premiere.yaml): pictures more than the frame server's catch-up margin
+                // (and a sample) before this one are late (rule 3); without a margin none are.
+                let margin = |m: Tick| m.to_rational_round(1, t.timescale.max(1) as i64).saturating_add(t.samples[i].duration as i64);
+                s.late_before.set(filmcraft_media::cancel::catch_up().map_or(i64::MIN, |m| want.saturating_sub(margin(m))));
+                $&
+
+# Rule 6/8: when playback last asked for frames.
+# What it's for: rule 8 holds thumbnails back while the program plays.
+# How: a module-level Mutex<Option<Instant>> next to FrameServer (one frame server per app). Rule 7
+#   sets it on every FrameServer::schedule_playback call, which the program monitor makes on each
+#   UI frame while playing.
+# Verify: rules 7 and 8 compile against it.
+# If upstream changes: keep it anywhere both schedule_playback and pump can see. If upstream starts
+#   holding background work back while playing, delete rules 6–8. Main already names that work
+#   (BACKGROUND_PRIO, is_background) but still runs it while playing.
+- file: crates/ui-egui/src/frames.rs
+  find: '^pub struct FrameServer \{'
+  before: |+
+    /// playground (patches/premiere.yaml): when playback last scheduled frames (schedule_playback).
+    /// While that is recent, `pump` holds thumbnail jobs back.
+    static PLAYBACK_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+# Rule 7/8: playback stamps PLAYBACK_AT.
+# What it's for: see rule 6.
+# How: first statement of FrameServer::schedule_playback.
+# Verify: rule 8's hold starts with Play and ends 0.5 s after Stop.
+# If upstream changes: stamp it wherever playback queues its frames each UI frame.
+- file: crates/ui-egui/src/frames.rs
+  find: 'pub fn schedule_playback\([^)]*\) \{'
+  after: |2-
+
+            *PLAYBACK_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+
+# Rule 8/8: thumbnails wait while playing.
+# What it's for: playback of stacked videos doesn't collapse while thumbnails are outstanding.
+#   - Without it, a thumbnail whose sources are busy with playback comes back pending and is run
+#     again on every UI frame. Each run CPU-renders all its layers and discards the result.
+#   - With 4 stacked 1080p layers that took 70% of the UI thread, and the thumbnail's requests (a
+#     poster frame) pulled each WebCodecs session away from the playhead. Its 40-frame cache then
+#     dropped the playhead's frames, and the session restarted from the keyframe: about 1 shown
+#     frame per second.
+# How: FrameServer::pump (the wasm path, which runs jobs on the UI thread) picks the best job among
+#   those it may run. While PLAYBACK_AT is under 500 ms old, item jobs at priority 40 or more stay
+#   queued: Project panel / timeline thumbnails (50) and the Media Browser (40), which upstream
+#   main calls background work (BACKGROUND_PRIO). Monitors, playback (0–14) and the scopes
+#   (Target::Sequence) still run. When only held jobs remain, the pump stops for this UI frame.
+# Verify: import 4 1080p MP4s, put them on V1–V4 and press Play at once. Playback runs, and the
+#   Project panel's thumbnails stay placeholders until about 0.5 s after Stop.
+# If upstream changes: the line picks the lowest (prio, index) job in pump's queue; keep the filter
+#   on that pick. If upstream stops re-running pending background jobs every UI frame (or defers them
+#   while playing itself), delete rules 6–8.
+- file: crates/ui-egui/src/frames.rs
+  find: '(if q\.is_empty\(\) \{\s*break;\s*\}\s*)let best = q\.iter\(\)\.enumerate\(\)\.min_by_key\(\|\(i, j\)\| \(j\.prio, \*i\)\)\.map\(\|\(i, _\)\| i\)\.unwrap_or\(0\);'
+  replace: |2-
+    $1// playground (patches/premiere.yaml): while playing, thumbnails wait (rule 8).
+                    let playing = PLAYBACK_AT.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+                    let held = |j: &Job| playing && j.prio >= 40 && matches!(j.key.target, Target::Item(_));
+                    let Some(best) = q.iter().enumerate().filter(|(_, j)| !held(j)).min_by_key(|(i, j)| (j.prio, *i)).map(|(i, _)| i) else { break };

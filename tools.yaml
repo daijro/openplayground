@@ -73,6 +73,7 @@ groups:
         repo: storytold/filmcraft
         icon: icons/premiere.svg
         theme: themes/premiere.js
+        patches: patches/premiere.yaml
         accent: "#9999FF"
         base: "#00005B"
 
