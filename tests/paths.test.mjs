@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  ancestry, appFor, appsFor, baseName, extOf, formatSize, formatWhen, fromAppPath, join, matchesTypes, normalize,
+  appFor, appsFor, baseName, extOf, formatSize, formatWhen, fromAppPath, join, matchesTypes, normalize,
   parentOf, toAppPath, uniqueName, validName, withType,
 } from '../shell/paths.js'
 
@@ -25,8 +25,6 @@ test('names and folders', () => {
   assert.equal(parentOf('/c.txt'), '/')
   assert.equal(join('/a', 'b.txt'), '/a/b.txt')
   assert.equal(join('/', 'b.txt'), '/b.txt')
-  assert.deepEqual(ancestry('/a/b'), ['/', '/a', '/a/b'])
-  assert.deepEqual(ancestry('/'), ['/'])
 })
 
 test('extensions', () => {

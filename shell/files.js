@@ -154,9 +154,15 @@ function onOpen(callback) {
 }
 
 /** The Files button: the explorer as a popup. "Open in <app>" opens files of this app here, others there. */
+/** Open a stored file in `app`: here if it's this page's app, else on that app's page (?open=). */
+export function openInApp(path, app) {
+  if (app.slug !== currentApp()?.slug) return (location.href = `${appHref(app)}?open=${encodeURIComponent(toAppPath(path))}`)
+  openHere(path).catch((e) => toast(`Couldn’t open ${baseName(path)}: ${e.message}`))
+}
+
+/** The full Files list as a popup (the fan's Open Files). */
 export async function openFilesPopup() {
   const apps = flatApps(await loadApps())
-  const here = currentApp()
   await modal(
     (done) =>
       explorer({
@@ -165,9 +171,8 @@ export async function openFilesPopup() {
         closable: true,
         onDone: done,
         onOpenInApp: (path, app) => {
-          if (app.slug !== here?.slug) return (location.href = `${appHref(app)}?open=${encodeURIComponent(toAppPath(path))}`)
           done(null)
-          openHere(path).catch((e) => toast(`Couldn’t open ${baseName(path)}: ${e.message}`))
+          openInApp(path, app)
         },
       }),
     { label: 'Files' },

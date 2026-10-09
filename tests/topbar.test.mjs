@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { launch, openPage, startSite } from './helpers.mjs'
+import { launch, openPage, startSite, until } from './helpers.mjs'
 
 let site, browser, apps
 before(async () => {
@@ -57,9 +57,11 @@ test('the version shows this build’s label', async () => {
   assert.match(await page.locator('.pg-version').textContent(), new RegExp(build.label.replace(/[.@]/g, '\\$&')))
 })
 
-test('Files opens the explorer popup and Esc closes it', async () => {
+test('Files fans out the stack; its Open Files item opens the explorer popup, and Esc closes it', async () => {
   const page = await openPage(browser, `${site.url}${wordPath()}`)
   await page.getByRole('button', { name: 'Files' }).click()
+  await page.getByRole('menu', { name: 'Recent files' }).waitFor()
+  await page.getByRole('menuitem', { name: 'Open Files' }).click()
   await page.getByRole('dialog', { name: 'Files' }).waitFor()
   await page.keyboard.press('Escape')
   await page.getByRole('dialog', { name: 'Files' }).waitFor({ state: 'detached' })
@@ -84,7 +86,7 @@ test('without the app list, the bar still has Files and Fullscreen', async () =>
   await page.locator('.pg-bar').waitFor()
   await page.getByRole('button', { name: 'Fullscreen' }).waitFor()
   await page.getByRole('button', { name: 'Files' }).click()
-  await page.getByRole('dialog', { name: 'Files' }).waitFor()
+  await page.getByRole('menu', { name: 'Recent files' }).waitFor()
   assert.equal(await page.locator('.pg-switch').count(), 0)
   await context.close()
 })
@@ -128,4 +130,24 @@ test('the bar’s Playground link carries the ArtCraft icon', async () => {
   const page = await openPage(browser, `${site.url}${wordPath()}`)
   const home = page.getByRole('link', { name: 'Playground' })
   assert.equal(await home.locator('img').getAttribute('src'), '/shell/artcraft-icon.svg')
+})
+
+test('the bar folds away with its arrow, comes back from the tab at the top center, and remembers', async () => {
+  const page = await openPage(browser, `${site.url}${wordPath()}`)
+  const canvasTop = async () => (await page.locator('body > canvas').first().boundingBox()).y
+  await page.getByRole('button', { name: 'Hide the bar' }).click()
+  await until(async () => (await canvasTop()) === 0, 10000, 'the app to take the full height')
+  await until(async () => !(await page.locator('.pg-bar').isVisible()), 10000, 'the bar to fold away')
+  const tab = page.getByRole('button', { name: 'Show the bar' })
+  await until(async () => Math.round((await tab.boundingBox())?.y ?? -99) === 0, 10000, 'the tab to drop in')
+  const box = await tab.boundingBox()
+  assert.equal(Math.round(box.y), 0, 'the tab hangs from the top edge')
+  assert.ok(Math.abs(box.x + box.width / 2 - page.viewportSize().width / 2) < 2, 'centered')
+  await page.reload()
+  await tab.waitFor()
+  assert.equal(await canvasTop(), 0, 'still hidden after a reload')
+  await tab.click()
+  await until(async () => (await canvasTop()) === 36, 10000, 'the app to make room for the bar again')
+  await until(async () => !(await tab.isVisible()), 10000, 'the tab to leave')
+  assert.equal(await page.locator('.pg-bar').isVisible(), true)
 })

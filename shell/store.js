@@ -2,7 +2,7 @@
 // (OPFS), in a folder of its own (Lightroom's library and After Effects' store share the origin's OPFS).
 // Paths are store paths ('/Reports/budget.xlsx', see paths.js). Changes are announced to this tab's
 // listeners and, through a BroadcastChannel, to other tabs, with the folder that changed.
-import { baseName, join, normalize, parentOf } from './paths.js'
+import { baseName, join, normalize, parentOf, uniqueName } from './paths.js'
 
 const FOLDER = 'playground-files'
 const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('playground-files') : null
@@ -153,6 +153,31 @@ export const move = async (from, to) => {
   }
   await remove(from)
 }
+
+// Files used to be kept in folders; the Files list is one flat list now. Move every file out of its folder to the
+// top level (adding " (2)" on a name clash) and remove the emptied folders. Once per page load (flattenOnce), so the
+// explorer and the fan opening together don't both move the same files.
+const flatten = async () => {
+  const top = await list('/')
+  const taken = new Set(top.filter((e) => e.kind === 'file').map((e) => e.name))
+  const lift = async (dir) => {
+    for (const entry of await list(dir)) {
+      if (entry.kind === 'folder') {
+        await lift(entry.path)
+        continue
+      }
+      const name = uniqueName(entry.name, taken)
+      taken.add(name)
+      await move(entry.path, join('/', name))
+    }
+  }
+  for (const folder of top.filter((e) => e.kind === 'folder')) {
+    await lift(folder.path)
+    await remove(folder.path)
+  }
+}
+let flattened
+export const flattenOnce = () => (flattened ??= flatten().catch((e) => console.error('playground: flattening Files', e)))
 
 export const usage = async () => {
   const { usage = 0, quota = 0 } = (await navigator.storage.estimate?.()) ?? {}

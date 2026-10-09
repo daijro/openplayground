@@ -24,15 +24,11 @@ test('the dashboard links to the Files page', async () => {
   await page.getByRole('listbox', { name: 'Files' }).waitFor()
 })
 
-test('new folder, upload, rename, move by dragging, delete', async () => {
+test('one flat list: upload, rename and delete, with no folders anywhere', async () => {
   const page = await openPage(browser, `${site.url}/files/`)
-  await page.getByText('This folder is empty').waitFor()
-
-  await page.getByRole('button', { name: 'New folder' }).click()
-  const field = page.getByLabel('New name for New folder')
-  await field.fill('Reports')
-  await field.press('Enter')
-  await row(page, 'Reports').waitFor()
+  await page.getByText('No files yet').waitFor()
+  assert.equal(await page.getByRole('button', { name: 'New folder' }).count(), 0)
+  assert.equal(await page.locator('.pg-crumbs').count(), 0)
 
   await page.locator('.pg-ex-tools input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
   await row(page, 'notes.txt').waitFor()
@@ -46,21 +42,27 @@ test('new folder, upload, rename, move by dragging, delete', async () => {
   await page.waitForTimeout(300)
   assert.equal(await page.locator('.pg-ex-status.pg-error').count(), 0, 'a successful rename shows no error')
 
-  await row(page, 'todo.txt').dragTo(row(page, 'Reports'))
-  await until(() => stat(page, '/Reports/todo.txt'), 5000, 'the move')
-  assert.equal(await stat(page, '/todo.txt'), null)
-  await page.waitForTimeout(300)
-  assert.equal(await page.locator('.pg-ex-status.pg-error').count(), 0, 'a successful move shows no error')
-
-  await row(page, 'Reports').dblclick()
-  await page.getByRole('button', { name: 'Reports' }).waitFor() // breadcrumb
   await row(page, 'todo.txt').click()
   await page.keyboard.press('Delete')
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click()
-  await until(async () => (await stat(page, '/Reports/todo.txt')) === null, 5000, 'the delete')
+  await until(async () => (await stat(page, '/todo.txt')) === null, 5000, 'the delete')
+})
 
-  await page.keyboard.press('Backspace')
-  await row(page, 'Reports').waitFor()
+test('files left in folders from before move up to the one list, renamed on a clash', async () => {
+  const context = await browser.newContext()
+  const seed = await openPage(browser, `${site.url}/shell/paths.js`, { context })
+  await seed.evaluate(async () => {
+    const store = await import('/shell/store.js')
+    await store.write('/test/a.png', new Uint8Array([1]))
+    await store.write('/test/deeper/b.txt', new Uint8Array([2]))
+    await store.write('/a.png', new Uint8Array([3]))
+  })
+  const page = await openPage(browser, `${site.url}/files/`, { context })
+  await row(page, 'b.txt').waitFor()
+  await row(page, 'a (2).png').waitFor()
+  assert.equal(await stat(page, '/test'), null)
+  assert.deepEqual([...(await page.evaluate(async () => (await import('/shell/store.js')).read('/a.png')))], [3], 'the file already at the top keeps its name')
+  await context.close()
 })
 
 test('rename refuses a taken name and an invalid one', async () => {
@@ -75,7 +77,7 @@ test('rename refuses a taken name and an invalid one', async () => {
   await page.keyboard.press('F2')
   await page.getByLabel('New name for a.txt').fill('b.txt')
   await page.keyboard.press('Enter')
-  await page.getByText('b.txt already exists here.').waitFor()
+  await page.getByText('b.txt already exists.').waitFor()
   await row(page, 'a.txt').click()
   await page.keyboard.press('F2')
   await page.getByLabel('New name for a.txt').fill('a/b')
@@ -97,7 +99,7 @@ test('file rows carry the icon of the app that opens them; download works', asyn
 
 test('dropping files from the computer uploads them', async () => {
   const page = await openPage(browser, `${site.url}/files/`)
-  await page.getByText('This folder is empty').waitFor()
+  await page.getByText('No files yet').waitFor()
   const dataTransfer = await page.evaluateHandle(() => {
     const dt = new DataTransfer()
     dt.items.add(new File(['abc'], 'dropped.txt', { type: 'text/plain' }))
@@ -108,7 +110,7 @@ test('dropping files from the computer uploads them', async () => {
   await until(() => stat(page, '/dropped.txt'), 5000, 'the upload')
 })
 
-test('dropping a file on the explorer header uploads it to the current folder', async () => {
+test('dropping a file on the explorer header uploads it', async () => {
   const page = await openPage(browser, `${site.url}/files/`)
   await page.getByRole('listbox', { name: 'Files' }).waitFor()
   const dataTransfer = await page.evaluateHandle(() => {

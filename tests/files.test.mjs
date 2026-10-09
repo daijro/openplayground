@@ -133,14 +133,14 @@ test('write refuses paths outside browser storage', async () => {
 
 test('?open= hands the file to onOpen once', async () => {
   const first = await shellPage()
-  await first.evaluate(() => playgroundFiles.write('browser:/Docs/Plan.docx', new Uint8Array([3, 1, 4])))
-  await until(() => stat(first, '/Docs/Plan.docx'), 5000, 'the write')
-  const page = await openPage(browser, `${site.url}/files/?open=${encodeURIComponent('browser:/Docs/Plan.docx')}`, { context: first.context() })
+  await first.evaluate(() => playgroundFiles.write('browser:/Plan.docx', new Uint8Array([3, 1, 4])))
+  await until(() => stat(first, '/Plan.docx'), 5000, 'the write')
+  const page = await openPage(browser, `${site.url}/files/?open=${encodeURIComponent('browser:/Plan.docx')}`, { context: first.context() })
   const file = await page.evaluate(async () => {
     await import('/shell/files.js')
     return new Promise((resolve) => playgroundFiles.onOpen(resolve))
   })
-  assert.equal(file.path, 'browser:/Docs/Plan.docx')
+  assert.equal(file.path, 'browser:/Plan.docx')
   assert.deepEqual(Object.values(file.bytes), [3, 1, 4])
   assert.equal(new URL(page.url()).searchParams.get('open'), null)
 })

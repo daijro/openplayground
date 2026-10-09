@@ -1,6 +1,6 @@
 // The bar above every app: back to the dashboard, switch apps, this build's version, Files and fullscreen.
 import { appHref, currentApp, loadApps } from './apps.js'
-import { openFilesPopup } from './files.js'
+import { toggleStack } from './stack.js'
 import { h, icon, isolate } from './ui.js'
 
 const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
@@ -9,6 +9,24 @@ const ago = (iso) => {
   const s = (Date.parse(iso) - Date.now()) / 1000
   const [unit, size] = UNITS.find(([, n]) => Math.abs(s) >= n) ?? ['minute', 60]
   return relative.format(Math.round(s / size), unit)
+}
+
+// The bar can be folded away (its arrow) and brought back (the tab at the top); the choice is kept in this browser.
+// app.js applies it before the page draws.
+const BAR_HIDDEN = 'pg-bar-hidden'
+export const barHidden = () => {
+  try {
+    return localStorage.getItem(BAR_HIDDEN) === '1'
+  } catch {
+    return false
+  }
+}
+function setBarHidden(hidden) {
+  document.documentElement.toggleAttribute('data-pg-bar-hidden', hidden)
+  try {
+    if (hidden) localStorage.setItem(BAR_HIDDEN, '1')
+    else localStorage.removeItem(BAR_HIDDEN)
+  } catch {}
 }
 
 export async function mountTopbar() {
@@ -26,11 +44,14 @@ export async function mountTopbar() {
       { class: 'pg-bar' },
       home,
       h('span', { class: 'pg-spacer' }),
-      h('button', { class: 'pg-bar-btn', type: 'button', onclick: () => openFilesPopup() }, icon('files'), h('span', { class: 'pg-label' }, 'Files')),
+      h('button', { class: 'pg-bar-btn pg-files', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: (e) => toggleStack(e.currentTarget) }, icon('files'), h('span', { class: 'pg-label' }, 'Files')),
       fullscreen,
+      h('button', { class: 'pg-collapse', type: 'button', 'aria-label': 'Hide the bar', title: 'Hide the bar', onclick: () => setBarHidden(true) }, icon('chevronUp')),
     ),
   )
-  document.body.prepend(bar)
+  // While the bar is folded away, a small tab hangs from the top center of the screen to bring it back.
+  const tab = isolate(h('button', { class: 'pg-bar-tab', type: 'button', 'aria-label': 'Show the bar', title: 'Show the bar', onclick: () => setBarHidden(false) }, icon('chevron')))
+  document.body.prepend(bar, tab)
 
   const { groups } = await loadApps()
   const app = groups.flatMap((g) => g.apps).find((a) => a.slug === here?.slug)

@@ -3,7 +3,9 @@
 // before leaving with work the app may not have saved.
 import { savedAt, unsavedReported } from './files.js'
 import { pendingWrites } from './store.js'
-import { mountTopbar } from './topbar.js'
+import { barHidden, mountTopbar } from './topbar.js'
+
+if (barHidden()) document.documentElement.setAttribute('data-pg-bar-hidden', '')
 
 const start = () => mountTopbar().catch((e) => console.error('playground: top bar', e))
 if (document.body) start()
@@ -13,7 +15,7 @@ else addEventListener('DOMContentLoaded', start, { once: true })
 // open counts as unsaved work, unless the app reports its own state (playgroundFiles.setUnsaved), as do store
 // writes still in flight.
 let lastInput = 0
-const inShell = (target) => target instanceof Element && !!target.closest('.pg-bar, .pg-modal, .pg-toasts, .pg-apps')
+const inShell = (target) => target instanceof Element && !!target.closest('.pg-bar, .pg-modal, .pg-toasts, .pg-apps, .pg-stack')
 for (const type of ['keydown', 'pointerdown']) addEventListener(type, (e) => inShell(e.target) || (lastInput = Date.now()), true)
 addEventListener('beforeunload', (e) => {
   const unsaved = unsavedReported() ?? lastInput > savedAt()

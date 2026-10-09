@@ -16,11 +16,6 @@ export const fromAppPath = (appPath) =>
 export const baseName = (path) => normalize(path).split('/').at(-1)
 export const parentOf = (path) => normalize(normalize(path).split('/').slice(0, -1).join('/'))
 export const join = (dir, name) => normalize(`${dir}/${name}`)
-/** Every folder from the root down to `path`, for the breadcrumb: ['/', '/a', '/a/b']. */
-export const ancestry = (path) => {
-  const parts = normalize(path).split('/').filter(Boolean)
-  return ['/', ...parts.map((_, i) => '/' + parts.slice(0, i + 1).join('/'))]
-}
 
 export const extOf = (name) => {
   const i = name.lastIndexOf('.')
