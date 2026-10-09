@@ -125,7 +125,9 @@ jobs:
 
             Usually upstream changed the code a rule in patches/${{ matrix.slug }}.yaml edits, so the rule no longer
             matches or the patched code no longer compiles. Update patches/${{ matrix.slug }}.yaml so every rule
-            applies and keeps doing what the comment at the top of the file says, on BOTH channels: the same
+            applies and keeps doing what its comment says (each rule's comment states what it is for, how it
+            works, how to verify it, and what to do if upstream moves or replaces that code; if upstream now
+            does a rule's job natively, delete the rule instead of forcing it to match), on BOTH channels: the same
             patch file builds the newest release and the newest commit, so a fix must not break the other one.
             Prefer anchors that survive future releases: the app's command names and type names rather than
             formatting or argument lists.

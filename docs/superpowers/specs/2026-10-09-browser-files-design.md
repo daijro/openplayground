@@ -82,8 +82,8 @@ Three parts:
 
 | Call | Result |
 |---|---|
-| `open({ types, multiple })` | Explorer in Open mode. Resolves to `[{ path, name, bytes }]`, or `null` on cancel. "From computer…" resolves the same way with `path: null`. |
-| `saveAs({ name, types })` | Asks **Keep in browser storage** or **Download to device**. Keep → explorer in Save mode → `{ path }`. Download → `{ download: true }`. Cancel → `null`. |
+| `open({ types })` | Explorer in Open mode (single files only). Resolves to `[{ path, name, bytes }]`, or `null` on cancel. "From computer…" resolves the same way with `path: null`. |
+| `saveAs({ name, types, bytes })` | Asks **Keep in browser storage** or **Download to device**. Keep → explorer in Save mode → `{ path }`. Download → the shell downloads `bytes` as `name` and resolves `{ download: true }`. Cancel → `null`. The app passes its serialized bytes so a download needs no second round trip. |
 | `write(path, bytes)` | Queues a store write (see above). |
 | `read(path)` | Promise of the file's bytes, for Recent documents and for `?open=`. |
 | `download(name, bytes)` | A regular browser download. |
@@ -165,7 +165,7 @@ One component, used in three places: the popup in apps, the apps' Open and Save 
     AutoSave stays off.
 - **Save** on a `browser:` document writes silently to that path through the engine.
 - **Open** uses the shell's `open`. The document remembers its `browser:` path (per document in Excel and
-  PowerPoint). A "From computer…" file opens as today, without a path.
+  PowerPoint). A "From computer…" file opens as today, without a path. In Excel and PowerPoint, reopening a stored document that is already open switches to it instead of opening a second copy.
 - **Exports** (PDF, PNG, CSV and the like) stay plain downloads.
 
 ### Mechanism
@@ -210,7 +210,7 @@ drift; the plan re-verifies them.
   - Remove the web build's `app.autosave = false`, restoring the desktop default (on).
   - AutoSave calls the engine's `file.save` on the document's path, which reaches the write hook. Only
     `browser:` paths succeed; others fail quietly as today.
-- **Excel:** the same `now_ms()` fix. Its AutoSave toggle keeps its default (off).
+- **Excel:** the same `now_ms()` fix. Its AutoSave toggle keeps its default (off). GridCraft also needed an extra rule stubbing `Instant::now()` in `cmd::commit` on wasm32, because the first cell edit panicked in the browser.
 - **PowerPoint:** has no AutoSave; nothing is added. Its AutoRecover stays off in the browser.
 
 ### Recent documents (Word)
