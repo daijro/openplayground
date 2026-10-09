@@ -81,7 +81,8 @@ jobs:
           echo '[]' > "$RUNNER_TEMP/index.json"
           echo "### ArtCraft Store ${SHA::7}" >> "$GITHUB_STEP_SUMMARY"
           while read -r p; do
-            name=$(jq -r '.name // .id' <<<"$p") source=$(jq -r '.source // ""' <<<"$p") file=$(jq -r '.artifact // ""' <<<"$p")
+            # The name is logged (summary, ::warning::): one line, no colons, so it can't inject workflow commands.
+            name=$(jq -r '(.name // .id) | tostring | gsub("[\\r\\n:]"; " ")' <<<"$p") source=$(jq -r '.source // ""' <<<"$p") file=$(jq -r '.artifact // ""' <<<"$p")
             if ! [[ $source =~ ^plugins/[A-Za-z0-9_][A-Za-z0-9._-]*$ && $file =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*\.wasm$ ]] || [ -e "out/$file" ]; then
               echo "- **$name**: skipped: not a cargo crate in plugins/ building a .wasm \`artifact\` (\`$source\`, \`$file\`), or a duplicate" >> "$GITHUB_STEP_SUMMARY"
               continue
