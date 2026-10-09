@@ -26,7 +26,13 @@ import { CHANNELS, JUNK, builtAssets, channelAssets, resolveVersion, tools } fro
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
 // Rust's default wasm32 features. wasm-opt reads them from the module's target_features section, which
 // some builds strip; without them it assumes the 2017 baseline and rejects e.g. memory.copy.
-const WASM_FEATURES = ['bulk-memory', 'bulk-memory-opt', 'call-indirect-overlong', 'multivalue', 'mutable-globals', 'nontrapping-float-to-int', 'reference-types', 'sign-ext'].map((f) => `--enable-${f}`)
+// Plus simd, which prepare() turns on (see SIMD).
+const WASM_FEATURES = ['bulk-memory', 'bulk-memory-opt', 'call-indirect-overlong', 'multivalue', 'mutable-globals', 'nontrapping-float-to-int', 'reference-types', 'sign-ext', 'simd'].map((f) => `--enable-${f}`)
+// Wasm SIMD (simd128), which Rust leaves off by default: the apps' CPU rendering (e.g. vello_cpu, which
+// redraws InDesign's page at every zoom step) runs 3-5x faster with it, and every current browser has it
+// (Chrome 91, Firefox 89, Safari 16.4; all with WebGPU). It goes in a cargo config in the folder above the
+// checkout, which cargo merges with the app's own (rustflags arrays add up); RUSTFLAGS would replace the app's.
+const SIMD = '[target.wasm32-unknown-unknown]\nrustflags = ["-Ctarget-feature=+simd128"]\n'
 
 // Changes when the build recipe or the tool's patches change, so either one triggers a rebuild.
 const buildHash = (t) =>
@@ -81,6 +87,8 @@ const prepare = async (slug, channel, { dir = 'src', patch = true } = {}) => {
   const work = process.env.BUILD_DIR ? resolve(process.env.BUILD_DIR, `${slug}-${channel}`) : mkdtempSync(join(tmpdir(), `build-${slug}-`))
   const src = join(work, dir)
   rmSync(src, { recursive: true, force: true })
+  mkdirSync(join(work, '.cargo'), { recursive: true })
+  writeFileSync(join(work, '.cargo', 'config.toml'), SIMD)
   if (release.ref) {
     // A commit (the head channel): fetch exactly that one.
     run('git', ['init', '--quiet', src])
