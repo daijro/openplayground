@@ -155,17 +155,20 @@ async function install(t, channel, name) {
   // A build made here with build.mjs (out/<slug>-<tag>-<hash>.zip) wins, to try builds before CI publishes them.
   const localZip = existsSync('out') && readdirSync('out').filter((f) => f.startsWith(`${t.slug}-${release.tag_name}-`) && f.endsWith('.zip')).sort((a, b) => statSync(join('out', a)).mtimeMs - statSync(join('out', b)).mtimeMs).at(-1)
   const local = localZip && { name: localZip, path: join('out', localZip), updated_at: statSync(join('out', localZip)).mtime.toISOString(), size: statSync(join('out', localZip)).size }
-  // The head channel has no upstream zip: until its newest commit is built, keep its newest earlier build;
-  // one never built is left out (the dashboard doesn't list it).
-  const previous = !upstream && !ours && builds[0]
-  const asset = local || ours || upstream || previous
+  // Until this version is built, keep the newest earlier build: the head channel has no upstream zip, and
+  // a patched tool's upstream zip lacks what the patches add or fix (Files, a shader Chrome rejects…). One
+  // never built falls back to the upstream zip, or else is left out (the dashboard doesn't list it).
+  const previous = !ours && (!upstream || t.patches) && builds[0]
+  const asset = local || ours || previous || upstream
   if (!asset) return console.warn(`${name}: ${release.tag_name} isn't built yet and there's no earlier build: skipped`)
   let { tag_name: tag, label, date } = release
   if (asset === previous) {
     tag = asset.name.slice(t.slug.length + 1, asset.name.lastIndexOf('-'))
-    const commit = tag.replace(/^head-/, '')
-    date = (await github(`repos/${t.repo}/commits/${commit}`)).commit.committer.date
-    label = `${t.branch ?? 'main'}@${commit}`
+    if (channel === 'head') {
+      const commit = tag.replace(/^head-/, '')
+      date = (await github(`repos/${t.repo}/commits/${commit}`)).commit.committer.date
+      label = `${t.branch ?? 'main'}@${commit}`
+    } else label = tag
     console.log(`${name}: ${release.tag_name} isn't built yet, keeping ${tag}`)
   }
 
