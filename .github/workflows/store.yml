@@ -67,9 +67,10 @@ jobs:
           git init -q store
           git -C store fetch -q --depth 1 https://github.com/akkk09/artcraft-store "$SHA"
           git -C store checkout -q FETCH_HEAD
+      # Docker Hub's official image through Google's mirror: Docker Hub rate-limits the runners' shared IPs.
       - name: Get a Rust toolchain for wasm32
         run: |
-          docker run --name rust-wasm rust:1-slim rustup target add wasm32-unknown-unknown
+          docker run --name rust-wasm mirror.gcr.io/library/rust:1-slim rustup target add wasm32-unknown-unknown
           docker commit rust-wasm rust-wasm
       # Each catalog plug-in for an app we host, built in the container with only the store mounted. One that
       # fails is skipped and listed in the job summary. Nothing here runs or trusts what the build leaves in
