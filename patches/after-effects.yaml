@@ -5,3 +5,22 @@
 - file: apps/*-web/src/**/*.rs
   find: '(query_value\("frameworkers"\)[^;]*?\.unwrap_or\()\s*(\d+)\s*(?:usize)?\s*\)'
   replace: '$1if cc.wgpu_render_state.as_ref().is_some_and(|rs| rs.adapter.get_info().backend == eframe::wgpu::Backend::BrowserWebGpu) { 0usize } else { $2usize })'
+
+# Keep a comp of 8 stacked video layers playing in the browser instead of crashing after about a minute.
+# What it's for: 8 stacked 1080p clips grew the page's memory ~55 MB/s while playing until wasm32's 4 GiB
+#   limit, and the app died (`unreachable`). Each clip's FilmCraft decoder keeps up to 384 MB of decoded
+#   frames (filmcraft gop.rs; nothing here can set that), and on top of it the footage cache kept 1 GiB of
+#   32-bit float frames (Settings ▸ Memory & CPU), which during playback only recycles buffers.
+# How: in the browser build the footage cache holds at most 256 MB, whatever the setting says: eight 1080p
+#   frames, the current frame of 8 layers. Desktop builds are unchanged.
+# Verify: 8 copies of a 1080p H.264 clip stacked in a comp and played for 150 s: the heap levels off at
+#   3710 MB (it ran out at 3.8 GB after about 60 s); 1 and 8 layers play at the same fps (about 24 and 3);
+#   with 1 layer, frames up to 2 s back from where playback stopped still render in about 17 ms.
+# If upstream changes: if the footage cache's budget (`fn budget` in crates/media/src/pool.rs,
+#   MediaPool::set_budget, or the `media_cache_mb` default) is already limited on wasm32 or by the number of
+#   clips, delete this rule; likewise once FilmCraft sizes each in-use GopCache by the number of clips
+#   (filmcraft's MEM3 shared budget only trims idle caches) and 8 stacked layers play 90 s under 3 GB
+#   without it. Otherwise re-anchor on whatever budget the footage LRU evicts against.
+- file: crates/media/src/pool.rs
+  find: 'self\.budget\.load\(Ordering::Relaxed\) as usize'
+  replace: '($&).min(if cfg!(target_arch = "wasm32") { 256 << 20 } else { usize::MAX })'
