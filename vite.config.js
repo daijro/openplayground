@@ -95,6 +95,8 @@ const shell = (req, res, next) => {
 
 export default defineConfig({
   appType: 'mpa',
+  // Worktrees and their app builds live in .claude/; changes there shouldn't reload the pages open here.
+  server: { watch: { ignored: ['**/.claude/**'] } },
   build: { rollupOptions: { input: { main: 'index.html', files: 'files/index.html' } } },
   plugins: [
     {
