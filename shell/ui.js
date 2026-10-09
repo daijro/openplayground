@@ -25,7 +25,6 @@ const ICONS = {
   chevron: '<path d="m7 10 5 5 5-5"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-  shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
   computer: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/>',
   browser: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M6 6.5h.01M8.5 6.5h.01"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',

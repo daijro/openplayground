@@ -103,8 +103,9 @@
     .switch input:checked { background: color-mix(in srgb, var(--warn) 35%, var(--line)); }
     .switch input:checked::before { transform: translateX(14px); background: var(--warn); }
     .switch input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-    .bar-end { display: flex; align-items: center; gap: 18px; }
-    .files-link { color: var(--muted); font-size: 13px; font-weight: 500; text-decoration: none; }
+    .bar-end { display: flex; align-items: center; gap: 22px; }
+    .files-link { display: inline-flex; align-items: center; gap: 7px; padding-right: 22px; border-right: 1px solid var(--line); color: var(--muted); font-size: 13px; font-weight: 500; text-decoration: none; }
+    .files-link svg { width: 15px; height: 15px; flex: none; }
     .files-link:hover { color: var(--text); }
     .files-link:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: 2px; }
 
@@ -133,7 +134,7 @@
     <div class="topbar">
       <p class="host">playground.daijro.dev</p>
       <div class="bar-end">
-        <a class="files-link" href="/files/">Files</a>
+        <a class="files-link" href="/files/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>Open Files</a>
         <label class="switch"><input type="checkbox" role="switch" id="latest">Use latest commits</label>
       </div>
     </div>

@@ -14,14 +14,9 @@ const ago = (iso) => {
 export async function mountTopbar() {
   const here = currentApp()
 
-  const fullscreen = h('button', { class: 'pg-bar-btn', type: 'button', 'aria-label': 'Fullscreen', title: 'Fullscreen' }, icon('expand'))
-  fullscreen.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}))
-  addEventListener('fullscreenchange', () => {
-    const on = !!document.fullscreenElement
-    fullscreen.replaceChildren(icon(on ? 'shrink' : 'expand'))
-    fullscreen.setAttribute('aria-label', on ? 'Exit fullscreen' : 'Fullscreen')
-    fullscreen.title = on ? 'Exit fullscreen' : 'Fullscreen'
-  })
+  // In fullscreen the bar hides (shell.css), so this only enters it; Esc leaves, as in any fullscreen page.
+  const fullscreen = h('button', { class: 'pg-bar-btn', type: 'button', 'aria-label': 'Fullscreen', title: 'Fullscreen (Esc to exit)' }, icon('expand'))
+  fullscreen.addEventListener('click', () => document.documentElement.requestFullscreen().catch(() => {}))
 
   // Everything that doesn't need apps.json goes up at once; the switcher and version join when the list arrives.
   const home = h('a', { class: 'pg-home', href: '/' }, h('span', { class: 'pg-mark', 'aria-hidden': 'true' }), h('span', { class: 'pg-label' }, 'Playground'))

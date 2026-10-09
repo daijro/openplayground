@@ -33,6 +33,10 @@
   }
 }
 
+/* Fullscreen (the bar's button) gives the app the whole screen: the bar steps aside until Esc ends it. */
+:root:fullscreen { --pg-bar: 0px; }
+:root:fullscreen .pg-bar { display: none; }
+
 /* App pages: the app's canvas (always the first canvas in <body>) sits below the bar. */
 body > canvas:first-of-type {
   position: fixed !important;

@@ -17,7 +17,9 @@ const row = (page, name) => page.getByRole('option', { name: new RegExp(`^${name
 
 test('the dashboard links to the Files page', async () => {
   const page = await openPage(browser, `${site.url}/`)
-  await page.getByRole('link', { name: 'Files' }).click()
+  const link = page.getByRole('link', { name: 'Open Files', exact: true })
+  assert.equal(await link.locator('svg').count(), 1, 'the link has a file icon')
+  await link.click()
   await page.waitForURL(/\/files\/$/)
   await page.getByRole('listbox', { name: 'Files' }).waitFor()
 })

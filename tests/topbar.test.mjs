@@ -65,12 +65,16 @@ test('Files opens the explorer popup and Esc closes it', async () => {
   await page.getByRole('dialog', { name: 'Files' }).waitFor({ state: 'detached' })
 })
 
-test('the fullscreen button enters and leaves fullscreen', async () => {
+test('fullscreen gives the app the whole screen: the bar steps aside until fullscreen ends', async () => {
   const page = await openPage(browser, `${site.url}${wordPath()}`)
   await page.getByRole('button', { name: 'Fullscreen' }).click()
   await page.waitForFunction(() => !!document.fullscreenElement)
-  await page.getByRole('button', { name: 'Exit fullscreen' }).click()
+  assert.equal(await page.locator('.pg-bar').isVisible(), false)
+  assert.equal((await page.locator('body > canvas').first().boundingBox()).y, 0)
+  await page.evaluate(() => document.exitFullscreen()) // what Esc does
   await page.waitForFunction(() => !document.fullscreenElement)
+  await page.locator('.pg-bar').waitFor()
+  assert.equal((await page.locator('body > canvas').first().boundingBox()).y, 36)
 })
 
 test('without the app list, the bar still has Files and Fullscreen', async () => {
