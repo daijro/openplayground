@@ -7,3 +7,310 @@
     let mut app = app;
     let dark = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()).is_some_and(|m| m.matches());
     let _ = app.run("ui.dark", serde_json::json!({"value": dark}));
+
+
+# ══ Browser storage ══════════════════════════════════════════════════════════════════════════════════════
+# Rules 1–7 connect WordCraft's browser build to openplayground's file storage. The site's shell
+# (shell/files.js in github.com/daijro/openplayground) gives every app page `globalThis.playgroundFiles`:
+#   open({types}) → [{path, name, bytes}] | null          saveAs({name, types, bytes}) → {path} | {download:true} | null
+#   write(path, bytes)    read(path) → Promise<bytes>      onOpen(callback)
+# Its files have paths like `browser:/Reports/memo.docx`. What the user gets in Word:
+#   - Save As, and Save on a document that isn't in browser storage yet, ask "Keep in browser storage /
+#     Download to device", then where; the document then lives at that path (title, "Saved" state).
+#   - Save on a browser-storage document writes back to it silently; AutoSave (on by default, as on the
+#     desktop) does the same a moment after each edit.
+#   - Open and Insert Picture open the site's file explorer (with "From computer…").
+#   - Recent documents in browser storage reopen; the shell's ?open=browser:/… opens one at startup.
+# If WordCraft gains its own browser-storage saving, compare it with this list and delete the rules whose
+# job it now does (rule 7's bridge last, once nothing calls it) rather than forcing them to match.
+
+# Rule 1/7: the two hooks the bridge (rule 7) fills in, on the host Services struct.
+# What it's for: Save As in the browser has to ask asynchronously (the dialog is a web page), and Recent has
+#   to open browser-storage files asynchronously; Services only had synchronous pickers.
+# How: save_as_async(suggested name, docx bytes) shows the dialog; a "Keep" answer comes back as
+#   `file.save {path}` on the control channel (rule 6). open_path_async(path) reads the file into `inbox`.
+# Verify: rules 2 and 5 compile and use them.
+# If upstream changes: put them on whatever struct carries the web services (open_async, download, inbox).
+- file: crates/ui-egui/src/lib.rs
+  find: 'pub inbox: Option<Inbox>,'
+  replace: |-
+    $&
+        /// playground (patches/word.yaml): ask where to save: the suggested name and the docx bytes (for a
+        /// download). A "Keep" answer comes back as `file.save {path: "browser:/…"}` on the control channel.
+        pub save_as_async: Option<Box<dyn Fn(&str, Vec<u8>)>>,
+        /// playground: reopen a browser-storage document by its `browser:` path; it arrives through `inbox`.
+        pub open_path_async: Option<Box<dyn Fn(&str)>>,
+
+# Rule 2/7: Save and Save As in the browser build.
+# What it's for: Save on a `browser:` document writes it back silently; anything else (Save on a new or
+#   uploaded document, Save As) asks Keep / Download instead of downloading straight away.
+# How: runs in WordApp::run before its web branch ("Web: saving and exporting become downloads"). A
+#   `browser:` path goes to the engine's own `file.save {path}`, which serializes, writes through
+#   io::save_path → WEB_WRITE (rule 3), and sets the document's path and saved state. Otherwise
+#   save_as_async (rule 1) gets the name and docx bytes. Save As from the UI (save_as_dialog: pick_save
+#   returns the bare name on the web, then `file.save {path: name}`) lands here too. Exports
+#   (file.exportPdf/exportPng) are left to the download branch on purpose.
+# Verify: new document → type → Ctrl+S → the Keep/Download dialog; Keep → name → Save; type, Ctrl+S → no
+#   dialog, and the file's time in Files changes.
+# If upstream changes: anchor on whatever handles file.save / file.saveAs in the web build before it
+#   downloads.
+- file: crates/ui-egui/src/lib.rs
+  find: 'if self\.services\.download\.is_some\(\) && matches!\(id, "file\.save"'
+  before: |
+    // playground (patches/word.yaml): Save / Save As against browser storage, before the download branch.
+            if let Some(ask) = &self.services.save_as_async
+                && matches!(id, "file.save" | "file.saveAs")
+            {
+                let path = params.get("path").and_then(Value::as_str).map(str::to_string).or_else(|| {
+                    if id == "file.save" { self.session.path.as_ref().map(|p| p.to_string_lossy().to_string()) } else { None }
+                });
+                if let Some(path) = path.filter(|p| p.starts_with("browser:")) {
+                    let r = self.session.run("file.save", &json!({"path": path})).map_err(|e| e.to_string());
+                    self.after_command("file.save");
+                    if let Err(e) = &r {
+                        self.status(e.clone());
+                    }
+                    return r;
+                }
+                let name = format!("{}.docx", self.title_stem());
+                let bytes = wordcraft_engine::io::save_bytes(&name, &self.session.doc)?;
+                ask(&name, bytes);
+                return Ok(json!({"asked": true}));
+            }
+            
+
+# Rule 3/7: where the engine writes `browser:` paths in the browser build.
+# What it's for: the engine's save (Save, AutoSave) ends in io::save_path, which in the browser build was an
+#   error stub. Now a `browser:` path's bytes go to playgroundFiles.write; other paths still error.
+# How: WEB_WRITE is a fn pointer the bridge (rule 7) sets; the engine crate needs no new dependency.
+# Verify: rule 2's silent Save and AutoSave change the stored file.
+# If upstream changes: put the hook wherever the wasm build's "write document bytes to a path" lives.
+- file: crates/engine/src/io.rs
+  find: '(#\[cfg\(target_arch = "wasm32"\)\]\s*pub fn save_path\(path: &std::path::Path, (\w+): &Document\) -> Result<\(\), String> \{)'
+  replace: |-
+    /// playground (patches/word.yaml): where `browser:` paths are written in the browser build. The web
+    /// crate's bridge sets it to openplayground's `playgroundFiles.write`; unset, saving errors as upstream.
+    pub static WEB_WRITE: std::sync::OnceLock<fn(&str, &[u8]) -> Result<(), String>> = std::sync::OnceLock::new();
+
+    $1
+        if let Some(write) = WEB_WRITE.get()
+            && path.to_string_lossy().starts_with("browser:")
+        {
+            let path = path.to_string_lossy();
+            return write(&path, &save_bytes(&path, $2)?);
+        }
+
+# Rule 4/7: a working clock in the browser build.
+# What it's for: AutoSave waits for a pause after the last edit, timed with now_ms(), which returns 0.0 in
+#   the browser build, so AutoSave could never fire there. (Status messages time out with it too.)
+# How: the wasm arm returns Date.now() through WEB_NOW_MS, a fn pointer the bridge (rule 7) sets.
+# Verify: with a browser-storage document, type and wait ~3 s: the stored file updates by itself.
+# If upstream changes: if now_ms gets a real wasm clock (js_sys, web-time, egui's input time), delete this.
+- file: crates/ui-egui/src/lib.rs
+  find: '(pub fn now_ms\(\) -> f64 \{[\s\S]*?#\[cfg\(target_arch = "wasm32"\)\]\s*\{\s*)0\.0'
+  replace: |-
+    /// playground (patches/word.yaml): the browser clock (`Date.now`), set by the web crate's bridge.
+    pub static WEB_NOW_MS: std::sync::OnceLock<fn() -> f64> = std::sync::OnceLock::new();
+
+    $1WEB_NOW_MS.get().map_or(0.0, |now| now())
+
+# Rule 5/7: Recent documents in browser storage reopen.
+# What it's for: File → Recent lists `browser:` paths after saving there; clicking one ran `file.open
+#   {path}`, which the browser build can't read synchronously.
+# How: a `browser:` entry goes to open_path_async (rule 1), which reads it into the inbox; the inbox opens it
+#   with its path, so it stays bound to that file.
+# Verify: save a document to browser storage, reload, File → Open: it's under Recent; clicking it opens it.
+# If upstream changes: anchor on the Recent list's click handler.
+- file: crates/ui-egui/src/backstage.rs
+  find: 'let _ = app\.run\("file\.open", json!\(\{"path": p\}\)\);'
+  replace: |-
+    // playground (patches/word.yaml): a browser-storage document reopens through the browser.
+                if let (true, Some(open)) = (p.starts_with("browser:"), &app.services.open_path_async) {
+                    open(&p);
+                } else {
+                    let _ = app.run("file.open", json!({"path": p}));
+                }
+
+# Rule 6/7: switch it on at startup.
+# What it's for: AutoSave back on (the desktop default; the browser build turned it off because it had
+#   nowhere to write), the control channel Save As answers come back on, and the bridge (rule 7) installed.
+# How: just before the app is handed to eframe (the theme rule above inserts its block at the same anchor).
+#   with_control wires the app's existing, otherwise desktop-only, control receiver.
+# Verify: rules 2–5 work; without the shell (playgroundFiles missing) install() returns early and the app
+#   behaves as upstream (rfd picker, downloads).
+# If upstream changes: anchor on where web.rs hands the app to eframe.
+- file: apps/*-web/src/**/*.rs
+  find: 'Ok\(Box::new\(\w*Shell\b'
+  before: |
+    // playground (patches/word.yaml): browser storage.
+                        let mut app = app;
+                        app.autosave = true;
+                        let (playground_tx, playground_rx) = std::sync::mpsc::channel();
+                        let mut app = app.with_control(playground_rx);
+                        playground::install(&mut app.services, playground_tx, cc.egui_ctx.clone());
+                        
+
+# Rule 7/7: the bridge between the app's web services and `playgroundFiles`.
+# What it's for: everything above; this is the only code that talks to the page.
+# How: install() replaces open_async (rfd) with the explorer, fills save_as_async / open_path_async (rule 1),
+#   WEB_WRITE (rule 3) and WEB_NOW_MS (rule 4), and registers onOpen (?open= and Files' "Open in Word").
+#   Save As answers go out as `file.save {path}` through the control channel (rule 6) and run in WordApp::run
+#   (rule 2). Without playgroundFiles it changes nothing.
+# Verify: the browser-storage flows above.
+# If upstream changes: this is self-contained; keep it at the end of the web crate's main file and adjust
+#   the names it uses (Services fields, ControlRequest, Inbox, DOC_EXTS/IMAGE_EXTS).
+- file: apps/*-web/src/web.rs
+  find: '$(?![\s\S])'
+  before: |
+
+    /// playground (patches/word.yaml): the bridge between WordCraft's web services and openplayground's
+    /// browser file storage, `globalThis.playgroundFiles` (shell/files.js in github.com/daijro/openplayground).
+    mod playground {
+        use std::sync::mpsc::Sender;
+
+        use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
+        use wordcraft_ui_egui::{ControlRequest, Inbox, Services};
+
+        /// Route the app's file services through browser storage. Without the shell (a page not served by
+        /// openplayground) nothing changes: the rfd picker and downloads stay.
+        pub fn install(services: &mut Services, control: Sender<ControlRequest>, ctx: egui::Context) {
+            if api().is_none() {
+                log::warn!("playground: no playgroundFiles on this page; keeping downloads");
+                return;
+            }
+            let Some(inbox) = services.inbox.clone() else { return };
+            let _ = wordcraft_engine::io::WEB_WRITE.set(write);
+            let _ = wordcraft_ui_egui::WEB_NOW_MS.set(js_sys::Date::now);
+            let (i, c) = (inbox.clone(), ctx.clone());
+            services.open_async = Some(Box::new(move |purpose: &str| {
+                open(if purpose == "picture" { super::IMAGE_EXTS } else { super::DOC_EXTS }, i.clone(), c.clone());
+            }));
+            let (i, c) = (inbox.clone(), ctx.clone());
+            services.open_path_async = Some(Box::new(move |path: &str| read(path.to_string(), i.clone(), c.clone())));
+            let c = ctx.clone();
+            services.save_as_async = Some(Box::new(move |name: &str, bytes: Vec<u8>| {
+                save_as(name, &["docx", "odt", "rtf"], &bytes, control.clone(), c.clone(), "file.save");
+            }));
+            on_open(inbox, ctx);
+        }
+
+        fn api() -> Option<JsValue> {
+            js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("playgroundFiles")).ok().filter(JsValue::is_object)
+        }
+
+        /// `playgroundFiles[method](...args)`; None when the shell is missing or the call threw.
+        fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
+            let api = api()?;
+            let f = js_sys::Reflect::get(&api, &JsValue::from_str(method)).ok()?.dyn_into::<js_sys::Function>().ok()?;
+            f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
+        }
+
+        fn object(fields: &[(&str, JsValue)]) -> JsValue {
+            let o = js_sys::Object::new();
+            for (k, v) in fields {
+                let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), v);
+            }
+            o.into()
+        }
+
+        fn list(items: &[&str]) -> JsValue {
+            items.iter().map(|s| JsValue::from_str(s)).collect::<js_sys::Array>().into()
+        }
+
+        fn field(v: &JsValue, key: &str) -> JsValue {
+            js_sys::Reflect::get(v, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
+        }
+
+        /// Await a promise from `call`: None when missing, rejected, or answered null/undefined (cancelled).
+        async fn settle(promise: Option<JsValue>) -> Option<JsValue> {
+            let promise = promise?.dyn_into::<js_sys::Promise>().ok()?;
+            match wasm_bindgen_futures::JsFuture::from(promise).await {
+                Ok(v) if !v.is_null() && !v.is_undefined() => Some(v),
+                Ok(_) => None,
+                Err(e) => {
+                    log::error!("playground: {e:?}");
+                    None
+                }
+            }
+        }
+
+        /// WEB_WRITE: hand a `browser:` path's bytes to the store, which saves them in the background.
+        fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
+            call("write", &[JsValue::from_str(path), js_sys::Uint8Array::from(bytes).into()])
+                .map(|_| ())
+                .ok_or_else(|| format!("{path}: browser storage isn't available"))
+        }
+
+        /// A file from the shell ({path, name, bytes}) into the inbox: under its `browser:` path when it has
+        /// one, so the app keeps that as the document's path, else under its name.
+        fn deliver(file: &JsValue, inbox: &Inbox) {
+            let name = field(file, "path").as_string().or_else(|| field(file, "name").as_string()).unwrap_or_else(|| "Document".into());
+            let bytes = js_sys::Uint8Array::new(&field(file, "bytes")).to_vec();
+            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+        }
+
+        fn open(types: &[&str], inbox: Inbox, ctx: egui::Context) {
+            let promise = call("open", &[object(&[("types", list(types))])]);
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(files) = settle(promise).await else { return };
+                for file in js_sys::Array::from(&files).iter() {
+                    deliver(&file, &inbox);
+                }
+                ctx.request_repaint();
+            });
+        }
+
+        fn read(path: String, inbox: Inbox, ctx: egui::Context) {
+            let promise = call("read", &[JsValue::from_str(&path)]);
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(bytes) = settle(promise).await else { return };
+                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((path, js_sys::Uint8Array::new(&bytes).to_vec()));
+                ctx.request_repaint();
+            });
+        }
+
+        /// Ask Keep / Download. Keep → the app saves to the chosen `browser:` path itself (`command {path}` on
+        /// the control channel); Download → the shell has already downloaded `bytes`.
+        fn save_as(name: &str, types: &[&str], bytes: &[u8], control: Sender<ControlRequest>, ctx: egui::Context, command: &'static str) {
+            let options = object(&[("name", JsValue::from_str(name)), ("types", list(types)), ("bytes", js_sys::Uint8Array::from(bytes).into())]);
+            let promise = call("saveAs", &[options]);
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(answer) = settle(promise).await else { return };
+                let Some(path) = field(&answer, "path").as_string() else { return };
+                let (request, _reply) = ControlRequest::new("engine.execute", serde_json::json!({"command": command, "params": {"path": path}}));
+                let _ = control.send(request);
+                ctx.request_repaint();
+            });
+        }
+
+        /// Files the shell hands this app: ?open=browser:/… at startup, and "Open in Word" from Files.
+        fn on_open(inbox: Inbox, ctx: egui::Context) {
+            let callback = Closure::<dyn FnMut(JsValue)>::new(move |file: JsValue| {
+                deliver(&file, &inbox);
+                ctx.request_repaint();
+            });
+            call("onOpen", &[callback.as_ref().clone()]);
+            callback.forget();
+        }
+
+        /// Rule A: the app's unsaved state, for the page's leave warning; only sent when it changes.
+        pub fn report_unsaved(unsaved: bool) {
+            thread_local! { static LAST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
+            if LAST.with(|last| last.replace(Some(unsaved))) != Some(unsaved) {
+                call("setUnsaved", &[JsValue::from_bool(unsaved)]);
+            }
+        }
+    }
+
+# Rule A: tell the page whether there are unsaved changes, for the "Leave site?" warning.
+# What it's for: closing the tab or leaving the app warns exactly when there's something unsaved (instead of
+#   the shell's guess from recent typing/clicking).
+# How: after the app's per-frame logic, report the session's dirty flag through playgroundFiles.setUnsaved; the
+#   bridge only calls into the page when the value changes.
+# Verify: open a document, type, close the tab -> the browser asks; save (Ctrl+S), close -> it doesn't.
+# If upstream changes: anchor on WebShell's per-frame logic; if the app sets its own beforeunload, delete this.
+- file: apps/*-web/src/web.rs
+  find: 'self\.app\.logic\(ctx\);'
+  replace: |-
+    $&
+            playground::report_unsaved(self.app.session.dirty);

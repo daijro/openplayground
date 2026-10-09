@@ -1,0 +1,86 @@
+// The Office apps against browser storage, end to end: real builds (our patched ones, installed by
+// `make fetch` from out/ or the builds release) on the real GPU. Opt in: E2E=1 node --test tests/office.e2e.test.mjs
+import assert from 'node:assert/strict'
+import { after, before, test } from 'node:test'
+import { GPU, launch, openPage, startSite, until } from './helpers.mjs'
+
+const E2E = process.env.E2E === '1'
+let site, browser, apps
+before(async () => {
+  if (!E2E) return
+  site = await startSite()
+  browser = await launch(GPU)
+  apps = (await (await fetch(`${site.url}/shell/apps.json`)).json()).groups.flatMap((g) => g.apps)
+})
+after(async () => {
+  await browser?.close()
+  await site?.close()
+})
+
+const stat = (page, path) => page.evaluate(async (p) => (await import('/shell/store.js')).stat(p), path)
+const dialogs = (page) => page.locator('dialog.pg-modal[open]').count()
+
+async function appPage(slug, { context, query = '' } = {}) {
+  const app = apps.find((a) => a.slug === slug)
+  const page = await openPage(browser, `${site.url}${(app.release ?? app.head).path}${query}`, { context, colorScheme: 'light' })
+  await page.waitForFunction(() => !document.querySelector('[id$="_loading"]'), null, { timeout: 120_000 })
+  await page.waitForTimeout(2500)
+  return page
+}
+
+// The shared flow: Save As (Keep) → silent Save → Open from the explorer → silent Save; and Download.
+async function roundTrip(slug, { edit, savedAs, autosave }) {
+  const page = await appPage(slug)
+  await edit(page)
+  await page.keyboard.press('Control+s')
+  await page.getByRole('button', { name: /Keep in browser storage/ }).click()
+  await page.getByLabel('File name').fill(savedAs.replace(/\.\w+$/, ''))
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  const first = await until(() => stat(page, `/${savedAs}`), 15_000, `${savedAs} to be saved`)
+
+  // Save again: no dialog, and the file changes.
+  await edit(page)
+  await page.keyboard.press('Control+s')
+  const second = await until(async () => {
+    const s = await stat(page, `/${savedAs}`)
+    return s.modified > first.modified && s
+  }, 15_000, 'the silent save')
+  assert.equal(await dialogs(page), 0, 'Save on a stored document opened a dialog')
+
+  if (autosave) {
+    await edit(page)
+    await until(async () => (await stat(page, `/${savedAs}`)).modified > second.modified, 20_000, 'AutoSave')
+  }
+
+  // Open it after a reload: the document is bound to its file again.
+  await page.reload()
+  await page.waitForFunction(() => !document.querySelector('[id$="_loading"]'), null, { timeout: 120_000 })
+  await page.waitForTimeout(2500)
+  await page.mouse.click(700, 450)
+  await page.keyboard.press('Control+o')
+  await page.getByRole('option', { name: new RegExp(`^${savedAs.replace('.', '\\.')}`) }).dblclick()
+  await page.locator('dialog.pg-modal').waitFor({ state: 'detached' })
+  await page.waitForTimeout(1500)
+  const before = await stat(page, `/${savedAs}`)
+  await edit(page)
+  await page.keyboard.press('Control+s')
+  await until(async () => (await stat(page, `/${savedAs}`)).modified > before.modified, 15_000, 'the save after Open')
+  assert.equal(await dialogs(page), 0, 'Save after Open opened a dialog')
+
+  // Download to device on a fresh document.
+  const fresh = await appPage(slug, { context: await browser.newContext({ acceptDownloads: true, colorScheme: 'light' }) })
+  await edit(fresh)
+  await fresh.keyboard.press('Control+s')
+  const [download] = await Promise.all([fresh.waitForEvent('download'), fresh.getByRole('button', { name: /Download to device/ }).click()])
+  assert.match(download.suggestedFilename(), new RegExp(`\\.${savedAs.split('.').pop()}$`))
+}
+
+test('Word: Save As, Save, AutoSave, Open and Download', { skip: !E2E }, () =>
+  roundTrip('word', {
+    savedAs: 'E2E Word.docx',
+    autosave: true,
+    edit: async (page) => {
+      await page.mouse.click(700, 450)
+      await page.keyboard.type(' hello')
+    },
+  }))
