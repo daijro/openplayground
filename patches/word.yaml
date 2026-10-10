@@ -316,9 +316,9 @@
 #   AutoSave) still writes the edit to the stored file.
 # If upstream changes: anchor on whatever clears dirty after a download; delete once exports no longer do.
 - file: crates/ui-egui/src/lib.rs
-  find: '(d\(&name, &bytes\);\s*\}\s*)self\.session\.dirty = false;'
+  find: 'self\.session\.dirty = false;(?=\s*(?:\}\s*)?return Ok\(json!\(\{"downloaded")'
   replace: |-
-    $1if self.services.save_as_async.is_none() {
+    if self.services.save_as_async.is_none() {
                     self.session.dirty = false;
                 }
 
