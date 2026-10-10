@@ -101,9 +101,9 @@
 #   Open the same one again (Ctrl+O, or "Open in Excel" from Files): it switches to the open tab.
 # If upstream changes: anchor on where inbox files are opened.
 - file: crates/ui-egui/src/lib.rs
-  find: 'self\.session\.run\("file\.open", json!\(\{"name": name, "base64": b64\}\)\)'
+  find: '(self(?:\.session)?)\.run\("file\.open", json!\(\{"name": name, "base64": b64\}\)\)'
   replace: |-
-    self.session.run(
+    $1.run(
                 "file.open",
                 if self.session.documents().iter().any(|d| d.path.as_deref() == Some(name.as_str())) {
                     json!({"path": name}) // already open: the engine switches to it
