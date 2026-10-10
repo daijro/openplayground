@@ -89,7 +89,7 @@
 # Verify: rule 2's silent Save and AutoSave change the stored file.
 # If upstream changes: put the hook wherever the wasm build's "write document bytes to a path" lives.
 - file: crates/engine/src/io.rs
-  find: '(#\[cfg\(target_arch = "wasm32"\)\]\s*pub fn save_path\(path: &std::path::Path, (\w+): &Document\) -> Result<\(\), String> \{)'
+  find: '(#\[cfg\(target_arch = "wasm32"\)\]\s*pub fn save_path(?:_with)?\(path: &std::path::Path, (\w+): &Document(?:, \w+: Option<&str>)?\) -> Result<\(\), String> \{)'
   replace: |-
     /// playground (patches/word.yaml): where `browser:` paths are written in the browser build. The web
     /// crate's bridge sets it to openplayground's `playgroundFiles.write`; unset, saving errors as upstream.
