@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.6.0+504ad1c4",
-  "photoshop@head": "head-1f84f19+504ad1c4",
+  "photoshop@head": "head-071fe45+504ad1c4",
   "illustrator": "v0.8.0+7621fc13",
   "illustrator@head": "head-e1599a1+7621fc13",
   "indesign": "v0.5.0+b21e5561",
@@ -24,6 +24,6 @@
   "fusion-360": "v0.1.1+a3ec3e9b",
   "fusion-360@head": "head-be09513+a3ec3e9b",
   "pro-tools": "v0.4.0+32b1324f",
-  "pro-tools@head": "head-d03eba8+32b1324f",
+  "pro-tools@head": "head-dc2ffda+32b1324f",
   "artcraft-store": "81f6f2e"
 }
