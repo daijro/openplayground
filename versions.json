@@ -1,10 +1,10 @@
 {
   "photoshop": "v0.6.0+504ad1c4",
-  "photoshop@head": "head-b37bff9+504ad1c4",
+  "photoshop@head": "head-1f84f19+504ad1c4",
   "illustrator": "v0.8.0+7621fc13",
-  "illustrator@head": "head-3ab2af0+7621fc13",
+  "illustrator@head": "head-e15ef47+7621fc13",
   "indesign": "v0.5.0+b21e5561",
-  "indesign@head": "head-60ad824+b21e5561",
+  "indesign@head": "head-56479fb+b21e5561",
   "lightroom": "v0.5.0+267d9c58",
   "lightroom@head": "head-5436951+267d9c58",
   "premiere": "v0.5.0+4af18f38",
@@ -22,7 +22,7 @@
   "autocad": "v0.4.0+32b1324f",
   "autocad@head": "head-43e33ad+32b1324f",
   "fusion-360": "v0.1.1+a3ec3e9b",
-  "fusion-360@head": "head-d1cdc4d+a3ec3e9b",
+  "fusion-360@head": "head-794a394+a3ec3e9b",
   "pro-tools": "v0.4.0+32b1324f",
   "pro-tools@head": "head-522e59f+32b1324f",
   "artcraft-store": "81f6f2e"
