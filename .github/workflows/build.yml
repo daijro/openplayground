@@ -139,7 +139,8 @@ jobs:
             context and removed lines must match that code exactly (hunk line counts needn't). When the two
             channels need different versions, write `<name>.<channel>.diff` next to `<name>.diff`. If upstream
             has merged the pull request, or now does the same thing natively in that channel's code, write the
-            diff (that channel's file) empty instead: an empty diff is skipped and deleted.
+            diff (that channel's file) empty instead: an empty diff is skipped. So when only one channel has merged
+            it, an empty `<name>.<channel>.diff` skips `<name>.diff` there and the other channel keeps applying it.
 
             Look at code with the Read, Grep and Glob tools; change the patches with Edit or Write. The only
             shell commands you can run are these two, as written or followed by `2>&1 | tail -n 60`:
@@ -160,6 +161,8 @@ jobs:
         run: |
           # Claude's last message and the tool calls it was refused (the action hides its full log).
           jq -r '.[] | select(.type == "result") | .result, (.permission_denials[]? | "Denied \(.tool_name): \(.tool_input | tostring)")' "$EXECUTION_FILE" || true
+          # Delete the emptied diffs that no longer do anything, so this builds what gets committed.
+          node scripts/build.mjs tidy "$SLUG"
           if [ -z "$(git status --porcelain -- "patches/$SLUG.yaml" "patches/$SLUG")" ]; then echo "Claude left the patches unchanged."; exit 1; fi
           git add -N "patches/$SLUG" 2>/dev/null || true
           git diff -- "patches/$SLUG.yaml" "patches/$SLUG"
@@ -171,8 +174,6 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # A diff Claude emptied is one upstream has now: delete it.
-          [ -d "patches/$SLUG" ] && find "patches/$SLUG" -name '*.diff' -empty -delete
           git add -A patches
           git commit -q -m "Repair $SLUG patches for ${{ steps.build.outputs.id }}" \
             -m "The $CHANNEL build failed with the old rules. Claude rewrote them in the Build apps workflow; the app rebuilt with the new ones, and its other channel still compiles."

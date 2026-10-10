@@ -21,14 +21,15 @@
 // instead. They apply before the rules, with `git apply --recount` (so hunk line counts needn't be exact),
 // and must apply, or the build fails. One upstream already has (it applies in reverse) is skipped; once the
 // newest release has it, `build` lists its files in out/<slug>.merged and build.yml deletes them. An empty
-// diff is skipped too (build.yml deletes it when committing a repair).
+// diff is skipped too, so an empty <name>.<channel>.diff skips <name>.diff on that channel; `tidy` deletes the
+// ones that do nothing (build.yml runs it on a repair).
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { applyDiffs, diffDir } from './diffs.mjs'
+import { applyDiffs, diffDir, tidyDiffs } from './diffs.mjs'
 import { CHANNELS, JUNK, builtAssets, channelAssets, resolveVersion, tools } from './releases.mjs'
 
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
@@ -197,7 +198,9 @@ if (command === 'plan') {
   await check(slug, channel)
 } else if (command === 'build' && slug && CHANNELS.includes(channel)) {
   await build(slug, channel)
+} else if (command === 'tidy' && slug) {
+  tidyDiffs(toolFor(slug))
 } else {
-  console.error('usage: node scripts/build.mjs plan | build|check|source|facts|prune <slug> release|head')
+  console.error('usage: node scripts/build.mjs plan | tidy <slug> | build|check|source|facts|prune <slug> release|head')
   process.exit(2)
 }

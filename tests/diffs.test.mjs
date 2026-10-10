@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { applyDiffs } from '../scripts/diffs.mjs'
+import { applyDiffs, tidyDiffs } from '../scripts/diffs.mjs'
 
 const roots = []
 after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })))
@@ -55,4 +55,10 @@ test('an empty diff is skipped, and a variant alone applies nowhere else', () =>
   const { src, t, read } = setup('one\ntwo\nthree\n', { 'pr-1.diff': '', 'pr-2.head.diff': change('two', 'TWO') })
   assert.deepEqual(applyDiffs(src, t, 'release'), [])
   assert.equal(read(), 'one\ntwo\nthree\n')
+})
+
+test('tidying keeps an empty channel diff while its <name>.diff is there, and deletes what does nothing', () => {
+  const { t } = setup('', { 'a.diff': change('two', 'TWO'), 'a.head.diff': '', 'b.diff': '', 'b.head.diff': '', 'c.release.diff': '', 'd.release.diff': change('two', 'TWO') })
+  tidyDiffs(t)
+  assert.deepEqual(readdirSync(t.patches.replace(/\.yaml$/, '')).sort(), ['a.diff', 'a.head.diff', 'd.release.diff'])
 })
