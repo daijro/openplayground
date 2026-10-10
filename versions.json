@@ -12,7 +12,7 @@
   "after-effects": "v0.6.0+3db67539",
   "after-effects@head": "head-30aaddf+3db67539",
   "acrobat": "v0.4.0+32b1324f",
-  "acrobat@head": "head-c110c57+32b1324f",
+  "acrobat@head": "head-fb46909+32b1324f",
   "word": "v0.3.0+0e612b25",
   "word@head": "head-d7d9702+0e612b25",
   "excel": "v0.3.0+a3e66fe1",
@@ -22,8 +22,8 @@
   "autocad": "v0.3.0+32b1324f",
   "autocad@head": "head-86f3199+32b1324f",
   "fusion-360": "v0.1.1+a3ec3e9b",
-  "fusion-360@head": "head-a3a1d15+a3ec3e9b",
+  "fusion-360@head": "head-1e5356e+a3ec3e9b",
   "pro-tools": "v0.3.0+32b1324f",
-  "pro-tools@head": "head-4216d4f+32b1324f",
+  "pro-tools@head": "head-522e59f+32b1324f",
   "artcraft-store": "81f6f2e"
 }
