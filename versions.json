@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.6.0+504ad1c4",
-  "photoshop@head": "head-7722172+504ad1c4",
+  "photoshop@head": "head-2b79c7c+504ad1c4",
   "illustrator": "v0.8.0+7621fc13",
   "illustrator@head": "head-6794385+7621fc13",
   "indesign": "v0.5.0+b21e5561",
@@ -16,7 +16,7 @@
   "word": "v0.4.0+072d36e3",
   "word@head": "head-004286e+072d36e3",
   "excel": "v0.4.0+a3e66fe1",
-  "excel@head": "head-13664fe+a3e66fe1",
+  "excel@head": "head-1ded850+a3e66fe1",
   "powerpoint": "v0.4.0+58c1b48d",
   "powerpoint@head": "head-d556ff9+58c1b48d",
   "autocad": "v0.4.0+32b1324f",
