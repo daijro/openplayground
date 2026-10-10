@@ -13,24 +13,29 @@
 #   first cell edit panicked ("time not implemented on this platform") and froze the app.
 # How: on wasm32 the timer is a stub whose elapsed() is zero (it is only printed under GRIDCRAFT_PROFILE).
 # Verify: type in a cell in the browser: no panic in the console; the e2e Excel test edits cells.
-# If upstream changes: delete this once commit no longer calls Instant::now on wasm (a web-time Instant, or
-#   the timer behind cfg(not(wasm32))).
+# If upstream changes: delete this once every channel's commit avoids Instant::now on wasm (newer head
+#   already skips it with cfg!(wasm32), where this is a harmless no-op: the stub is Copy and only elapsed()
+#   is used; a web-time Instant would do too).
 - file: crates/engine/src/cmd/mod.rs
-  find: 'let t0 = std::time::Instant::now\(\);'
+  find: 'std::time::Instant::now\(\)'
   replace: |-
-    #[cfg(not(target_arch = "wasm32"))]
-        let t0 = std::time::Instant::now();
-        #[cfg(target_arch = "wasm32")]
-        let t0 = {
-            struct NoClock;
-            impl NoClock {
-                fn elapsed(&self) -> std::time::Duration {
-                    std::time::Duration::ZERO
-                }
+    {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                std::time::Instant::now()
             }
-            NoClock
-        };
-
+            #[cfg(target_arch = "wasm32")]
+            {
+                #[derive(Clone, Copy)]
+                struct NoClock;
+                impl NoClock {
+                    fn elapsed(&self) -> std::time::Duration {
+                        std::time::Duration::ZERO
+                    }
+                }
+                NoClock
+            }
+        }
 
 # ══ Browser storage ══════════════════════════════════════════════════════════════════════════════════════
 # Rules 1–7 connect GridCraft's browser build to openplayground's file storage. The site's shell
