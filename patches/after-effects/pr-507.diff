@@ -1,6 +1,6 @@
 Stacked footage plays faster and no longer runs out of memory in the browser: the three commits of our
 upstream pull request https://github.com/storytold/effectcraft/pull/507 (branch perf/footage-playback of
-daijro/effectcraft-fix), as one diff. This copy fits the newest commit (pr-507.release.diff is the same change for the newest release).
+daijro/effectcraft-fix), as one diff. This copy fits the newest release (pr-507.head.diff is empty: the newest commit has merged the pull request).
   1. The layer cache stays within 512 MB and the footage cache within 256 MB on wasm32: 8 stacked 1080p
      clips used to run the page out of memory after about 45 s.
   2. Below Full resolution, movie frames are downscaled in Y'CbCr before converting to RGBA
