@@ -1,9 +1,9 @@
-// NoteCraft (onenote): the web build starts with the sample notebooks and the Project X page open (the tree expanded
-// down to it), in every fresh browser; the joiner then adopts the owner's notebooks (same paths). Rows of the tree are
+// NoteCraft (onenote): a fresh browser starts with the bundled Welcome notebook open; the joiner then adopts the
+// owner's notebooks (same paths). Rows of the tree are
 // 27 points apart under the shell's bar; a click on a block of the page puts the caret in it; the Draw tab's pens make
 // the pointer draw on the page (its ink.svg), and Type gives it back to the text. The owner types a letter at the
-// start of Project X's first paragraph; the editor opens Ideas › Format ideas and draws a stroke on it: two files, two
-// paths of the shared document. Ctrl+Z (the session's Undo while connected) takes back only the owner's letter.
+// start of the welcome page's first paragraph; both editors work on that page. Ctrl+Z (the session's Undo while
+// connected) takes back only the owner's letter.
 // drag(): the owner draws, the pen held down (presence `ink`: the stroke so far); release() lets go and takes the
 // stroke back with Ctrl+Z, so nothing has changed, and picks Type again. point(): the owner clicks into the paragraph
 // and rests the pointer on the page (presence: page, pointer, caret). importMedia(): the owner drops a picture on the
@@ -15,10 +15,10 @@ const checkpoint = (page) => page.evaluate(() => {
   try { return new TextDecoder().decode(playgroundLiveAdapter.checkpoint()) } catch (e) { return `error: ${e}` }
 })
 const presence = (page) => page.evaluate(() => playgroundLiveAdapter.presence())
-// The first paragraph of the page shown (Project X's and Format ideas' both start under the title), tree rows, the
+// The first paragraph of the welcome page, tree rows, the
 // Draw tab with its Type tool and first pen, and somewhere to draw (over the page's words).
-const PARAGRAPH = { x: 410, y: 348 }, IDEAS = { x: 80, y: 396 }, FORMAT_IDEAS = { x: 130, y: 423 }
-const DRAW = { x: 164, y: 82 }, TYPE = { x: 287, y: 140 }, PEN = { x: 391, y: 140 }, SHEET = { x: 520, y: 470 }
+const PARAGRAPH = { x: 410, y: 730 }
+const DRAW = { x: 195, y: 82 }, TYPE = { x: 287, y: 140 }, PEN = { x: 391, y: 140 }, SHEET = { x: 520, y: 470 }
 // The first choice of the dialog a dropped file opens (centred in the window).
 const INSERT_PICTURE = { x: 503, y: 397 }
 // A letter typed where `at` is, until the shared document has it.
@@ -39,13 +39,14 @@ async function penDown(page) {
   await page.mouse.down()
   for (let i = 1; i <= 8; i++) { await page.mouse.move(SHEET.x + 20 * i, SHEET.y + (i % 2) * 12); await page.waitForTimeout(40) }
 }
-const ink = (doc) => JSON.stringify(doc).includes('ink.svg')
+const ink = (doc) => !!doc.files?.['welcome-to-notecraft']?.['00-start']?.welcome?.['ink.svg']
 
 export default {
   path: '/head/notecraft/',
+  url: '/head/notecraft/index.html',
   viewport: { width: 1280, height: 800 },
   ready: async (page) => {
-    await until(async () => JSON.parse((await checkpoint(page)).replace(/^error.*/, '{}')).files?.['my-notebook']?.work?.projects?.['project-x']?.['index.html'], 120000, 'the sample notebooks')
+    await until(async () => JSON.parse((await checkpoint(page)).replace(/^error.*/, '{}')).files?.['welcome-to-notecraft']?.['00-start']?.welcome?.['index.html'], 120000, 'the Welcome notebook')
     await page.waitForTimeout(500)
   },
   drag: async (page) => {
@@ -66,10 +67,6 @@ export default {
   },
   editA: (page) => type(page, PARAGRAPH, 'A'),
   editB: async (page) => {
-    await page.mouse.click(IDEAS.x, IDEAS.y)
-    await page.waitForTimeout(300)
-    await page.mouse.click(FORMAT_IDEAS.x, FORMAT_IDEAS.y)
-    await until(async () => (await presence(page))?.page === 'my-notebook/ideas/format-ideas', 10000, 'Format ideas to open')
     await penDown(page)
     await page.mouse.up()
     await until(async () => ink(JSON.parse(await checkpoint(page))), 10000, 'the editor\'s stroke in the page')
