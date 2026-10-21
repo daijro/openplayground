@@ -67,6 +67,20 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: files and the clock (patches/onenote.yaml).\n#[cfg(target_arch = \"wasm32\")] use notecraft_model::playground::std;\n"
 
+# The page source viewer reads the virtual notebook files too. Path::is_file asks the host file system,
+# so use the browser file-system shim for both enumeration and the file check.
+- file: crates/ui-egui/src/codeview.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: files (patches/onenote.yaml).\n#[cfg(target_arch = \"wasm32\")] use notecraft_model::playground::std;\n"
+- file: crates/ui-egui/src/codeview.rs
+  find: 'if\s+!entry\.path\(\)\.is_file\(\)|if\s+!std::fs::metadata\(entry\.path\(\)\)\.is_ok_and\(\|m\| m\.is_file\(\)\)'
+  replace: 'if !std::fs::metadata(entry.path()).is_ok_and(|m| m.is_file())'
+
+# File::open in the browser must read from the same in-memory notebook as read_to_string and read_dir.
+- file: crates/model/src/playground.rs
+  find: 'pub\s+mod\s+fs\s*\{'
+  after: "\n        /// A read handle into one file in the browser's in-memory notebook.\n        pub struct File { path: PathBuf, position: usize }\n\n        impl File {\n            pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {\n                let path = key(path.as_ref());\n                if !metadata(&path)?.is_file() {\n                    return Err(io::Error::new(io::ErrorKind::InvalidInput, \"not a file\"));\n                }\n                Ok(Self { path, position: 0 })\n            }\n        }\n\n        impl io::Read for File {\n            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {\n                let path = self.path.clone();\n                let position = self.position;\n                let count = TREE.with(|tree| match tree.borrow().entries.get(&path) {\n                    Some(Entry::File(bytes, _)) => {\n                        let start = position.min(bytes.len());\n                        let rest = &bytes[start..];\n                        let count = rest.len().min(buffer.len());\n                        buffer[..count].copy_from_slice(&rest[..count]);\n                        Ok(count)\n                    }\n                    _ => Err(missing(&path)),\n                })?;\n                self.position += count;\n                Ok(count)\n            }\n        }\n"
+
 # Rules 12-15/28: the page file, the child folders, the attachments and the page open last, as `fs::metadata` reads
 # them (Path::is_file and is_dir are exactly that, through the real file system).
 # Verify: the tree shows the notebooks and a page with a picture lists it. If upstream changes: anchor on the

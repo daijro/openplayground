@@ -737,7 +737,7 @@ index 0000000..f851b31
 +}
 +
 +/// What the browser handed over for one Paste; `None` when it would not.
-+type Read = Option<(Option<String>, Option<(usize, usize, Vec<u8>)>)>;
++type Read = Option<(Option<String>, Option<String>, Option<(usize, usize, Vec<u8>)>)>;
 +
 +enum State {
 +    Idle,
@@ -754,6 +754,25 @@ index 0000000..f851b31
 +
 +pub struct Clipboard;
 +
++pub struct Get;
++
++impl Get {
++    pub fn html(self) -> Result<String, Error> {
++        STATE.with_borrow(|s| match s {
++            State::Serving(Some((_, Some(html), _))) => Ok(html.clone()),
++            _ => Err(Error),
++        })
++    }
++}
++
++pub struct Set;
++
++impl Set {
++    pub fn html(self, html: String, alt: Option<String>) -> Result<(), Error> {
++        write_html(&html, alt.as_deref().unwrap_or("")).ok_or(Error)
++    }
++}
++
 +impl Clipboard {
 +    pub fn new() -> Result<Self, Error> {
 +        Ok(Clipboard)
@@ -761,7 +780,7 @@ index 0000000..f851b31
 +
 +    pub fn get_image(&mut self) -> Result<ImageData<'static>, Error> {
 +        STATE.with_borrow(|s| match s {
-+            State::Serving(Some((_, Some((width, height, rgba))))) => Ok(ImageData { width: *width, height: *height, bytes: Cow::Owned(rgba.clone()) }),
++            State::Serving(Some((_, _, Some((width, height, rgba))))) => Ok(ImageData { width: *width, height: *height, bytes: Cow::Owned(rgba.clone()) }),
 +            _ => Err(Error),
 +        })
 +    }
@@ -773,9 +792,17 @@ index 0000000..f851b31
 +
 +    pub fn get_text(&mut self) -> Result<String, Error> {
 +        STATE.with_borrow(|s| match s {
-+            State::Serving(Some((Some(text), _))) => Ok(text.clone()),
++            State::Serving(Some((Some(text), _, _))) => Ok(text.clone()),
 +            _ => Err(Error),
 +        })
++    }
++
++    pub fn get(&mut self) -> Get {
++        Get
++    }
++
++    pub fn set(&mut self) -> Set {
++        Set
 +    }
 +}
 +
@@ -827,12 +854,16 @@ index 0000000..f851b31
 +async fn read() -> Read {
 +    let clipboard = get(&get(&js_sys::global(), "navigator"), "clipboard");
 +    let items = call(&clipboard, "read", &[]).await?;
-+    let (mut text, mut picture) = (None, None);
++    let (mut text, mut html, mut picture) = (None, None, None);
 +    for item in js_sys::Array::from(&items).iter() {
 +        for kind in js_sys::Array::from(&get(&item, "types")).iter().filter_map(|t| t.as_string()) {
 +            if kind == "text/plain" && text.is_none() {
 +                if let Some(blob) = call(&item, "getType", &[kind.into()]).await {
 +                    text = call(&blob, "text", &[]).await.and_then(|t| t.as_string()).map(|t| t.replace("\r\n", "\n"));
++                }
++            } else if kind == "text/html" && html.is_none() {
++                if let Some(blob) = call(&item, "getType", &[kind.into()]).await {
++                    html = call(&blob, "text", &[]).await.and_then(|t| t.as_string());
 +                }
 +            } else if kind.starts_with("image/") && picture.is_none() {
 +                let Some(blob) = call(&item, "getType", &[kind.into()]).await else { continue };
@@ -844,5 +875,34 @@ index 0000000..f851b31
 +            }
 +        }
 +    }
-+    Some((text, picture))
++    Some((text, html, picture))
++}
++
++/// Writes both formats while the click's browser permission is active.
++fn write_html(html: &str, text: &str) -> Option<()> {
++    use js_sys::{Array, Function, Object, Promise, Reflect};
++    let global = js_sys::global();
++    let blob_ctor = get(&global, "Blob").dyn_into::<Function>().ok()?;
++    let make_blob = |data: &str, mime: &str| {
++        let parts = Array::new();
++        parts.push(&JsValue::from_str(data));
++        let options = Object::new();
++        Reflect::set(&options, &JsValue::from_str("type"), &JsValue::from_str(mime)).ok()?;
++        let args = Array::new();
++        args.push(&parts);
++        args.push(&options);
++        Reflect::construct(&blob_ctor, &args).ok()
++    };
++    let values = Object::new();
++    Reflect::set(&values, &JsValue::from_str("text/html"), &make_blob(html, "text/html")?).ok()?;
++    Reflect::set(&values, &JsValue::from_str("text/plain"), &make_blob(text, "text/plain")?).ok()?;
++    let item_ctor = get(&global, "ClipboardItem").dyn_into::<Function>().ok()?;
++    let item = Reflect::construct(&item_ctor, &Array::of1(&values)).ok()?;
++    let clipboard = get(&get(&global, "navigator"), "clipboard");
++    let write = get(&clipboard, "write").dyn_into::<Function>().ok()?;
++    let promise = write.apply(&clipboard, &Array::of1(&Array::of1(&item))).ok()?.dyn_into::<Promise>().ok()?;
++    wasm_bindgen_futures::spawn_local(async move {
++        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
++    });
++    Some(())
 +}
