@@ -87,6 +87,10 @@ jobs:
           compgen -G '/usr/lib/llvm-*/lib/libclang*.so*' >/dev/null || compgen -G '/usr/lib/x86_64-linux-gnu/libclang*.so*' >/dev/null \
             || { sudo apt-get update -q && sudo apt-get install -yq libclang-dev; }
 
+      - name: Install Chromium for the NoteCraft startup smoke test
+        if: matrix.slug == 'onenote'
+        run: node node_modules/playwright-core/cli.js install --with-deps chromium
+
       - id: build
         name: Build
         continue-on-error: true
@@ -94,6 +98,22 @@ jobs:
         run: |
           node scripts/build.mjs facts "$SLUG" "$CHANNEL" >> "$GITHUB_OUTPUT"
           node scripts/build.mjs build "$SLUG" "$CHANNEL" 2>&1 | tee build.log
+
+      - name: Smoke test the NoteCraft WASM app in Chromium
+        if: matrix.slug == 'onenote' && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$(find out -maxdepth 1 -name '*.zip' -print -quit)
+          test -n "$archive"
+          dest="$RUNNER_TEMP/notecraft-smoke"
+          mkdir -p "$dest"
+          unzip -q "$archive" -d "$dest"
+          index=$(find "$dest" -mindepth 2 -maxdepth 2 -name index.html -print -quit)
+          test -n "$index"
+          CHROMIUM="$(node --input-type=module -e 'import { chromium } from "playwright-core"; console.log(chromium.executablePath())')" \
+            NOTECRAFT_WEB_DIST="$(dirname "$index")" \
+            node --test tests/notecraft-startup.e2e.test.mjs
 
       # A failed build usually means upstream changed the code a patch rule edits. Claude (signed in with the
       # CLAUDE_CODE_OAUTH_TOKEN secret) rewrites this app's patch file until `check` passes on both channels,
