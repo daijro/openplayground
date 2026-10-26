@@ -51,6 +51,17 @@ test('saveAs → Download downloads the bytes and answers { download: true }', a
   assert.deepEqual(await answer, { download: true })
 })
 
+test('saveAs without bytes → Download answers { download: true } and leaves the download to the app', async () => {
+  const page = await shellPage()
+  let downloaded = false
+  page.on('download', () => (downloaded = true))
+  const answer = page.evaluate(() => playgroundFiles.saveAs({ name: 'Mix.wav', types: ['wav'] }))
+  await page.getByRole('button', { name: /Download to device/ }).click()
+  assert.deepEqual(await answer, { download: true })
+  await page.waitForTimeout(300)
+  assert.equal(downloaded, false)
+})
+
 test('saveAs and open answer null on Esc', async () => {
   const page = await shellPage()
   const saved = page.evaluate(() => playgroundFiles.saveAs({ name: 'x.docx', types: ['docx'], bytes: new Uint8Array() }))

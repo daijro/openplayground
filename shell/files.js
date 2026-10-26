@@ -5,7 +5,8 @@
 //   open({ types })               → [{ path, name, bytes }] | null    the explorer's Open; "From computer…"
 //                                                                    gives a file with path: null
 //   saveAs({ name, types, bytes }) → { path } | { download: true } | null
-//                                    Keep → explorer Save; Download → the shell downloads `bytes` itself
+//                                    Keep → explorer Save; Download → the shell downloads `bytes` itself (without
+//                                    `bytes`, for a file the app writes after picking where, the app downloads it)
 //   write(path, bytes)            queued store write; a failure shows "Download instead"
 //   read(path)                    → Promise<Uint8Array>
 //   files(folder)                 → Promise<[path]>: every file at or below a folder (none if it doesn't exist),
@@ -60,7 +61,7 @@ async function open({ types = [] } = {}) {
   return [await fileAt(picked)]
 }
 
-async function saveAs({ name = 'Untitled', types = [], bytes = new Uint8Array() } = {}) {
+async function saveAs({ name = 'Untitled', types = [], bytes } = {}) {
   const apps = flatApps(await loadApps())
   const available = await store.available()
   const answer = await modal(
@@ -101,7 +102,7 @@ async function saveAs({ name = 'Untitled', types = [], bytes = new Uint8Array() 
   )
   if (!answer) return null
   if (answer.download) {
-    download(name, bytes)
+    if (bytes) download(name, bytes)
     return { download: true }
   }
   mark()

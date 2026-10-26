@@ -1,0 +1,97 @@
+# Altered Audio Editor in the browser, renamed Retake (its name and logo are its authors' trademarks: TRADEMARKS.md
+# upstream). Upstream (github.com/geekcastradio/altered-audio-editor) is a Tauri app, a Svelte interface over a Rust
+# back end, and releases desktop packages only; these patches add the web build Playground serves, from its head
+# commit.
+#
+# The back end runs in a worker as a WASI module (wasm32-wasip1), so its files, clock and WAV writers work unchanged
+# against the page's files; Tauri is replaced by stand-ins it compiles against as is. patches/audition/web.diff adds
+# new files only:
+#   scripts/build-web.sh             build.mjs runs it: wasi-sdk (downloaded) compiles LAME for MP3 export, cargo builds
+#                                    apps/altered-web for wasm32-wasip1 with upstream's Cargo.lock (the stand-ins in
+#                                    place of what they replace), Vite builds the interface (apps/altered-web/
+#                                    vite.config.mjs: upstream's config with @tauri-apps/api taken from js/), and every
+#                                    "Altered Audio" the app shows becomes "Retake" (not its book, its donation link or
+#                                    "Based on"). Cargo.lock at the root is a note for build.mjs, which looks for one.
+#   apps/altered-web/src/lib.rs      the module's exports: start, commands (JSON in, JSON or bytes out), the file dialog
+#                                    a command asked for and its answer, each block of audio out and of microphone in.
+#   apps/altered-web/stand-ins/      tauri (managed state, `#[command]` and `generate_handler!` through tauri-macros,
+#                                    paths: `/` is Playground's Files, the app's own folders under /.app), its build
+#                                    step, dialogs (a dialog gives "cancelled" and leaves its question; the page asks it
+#                                    with Playground's Open or Save As and runs the command again with the answer),
+#                                    links, the updater (never an update) and libloading (no VST3 plug-ins).
+#   apps/altered-web/playground/     the page's audio (each player's blocks, added up; the microphone's to each
+#                                    recorder) and a `std` whose thread::spawn runs what it's given at once.
+#   src-tauri/src/engine/{transport,preview,record}/web.rs   playback, file preview and recording without their
+#                                    threads: `run` sets the player up as upstream's does and hands the page's audio a
+#                                    callback that renders into the rings then plays from them with upstream's own
+#                                    mix/fill (the recorder: writes the takes, meters and monitors each microphone
+#                                    block), and returns. A recording's takes are finished when it stops.
+#   apps/altered-web/js/             the page's side: the worker (worker.js) running the module on WASI over an
+#                                    in-memory file system (wasi.js); the page (playground.js) mirroring it with Files
+#                                    (a file's bytes load when a command reaches for them, then the command runs again;
+#                                    Files is one flat list, so folders go in the name: /Show/Audio/a.wav is
+#                                    "Show › Audio › a.wav"), settings in localStorage, Save As > Download to device,
+#                                    files dropped or opened from the computer kept in Files, "Open in Retake", the
+#                                    leave warning; one AudioContext whose AudioWorklet (audio-worklet.js) trades blocks
+#                                    with the worker directly; and @tauri-apps/api's core, event, webview and window.
+#   apps/altered-web/logo.svg        the About box's logo.
+# Native builds see none of this: every rule adds wasm-only lines.
+#
+# `build.mjs check` compiles for wasm32-unknown-unknown, which this build doesn't use: there LAME's configure has no C
+# library and fails. Build with `node scripts/build.mjs build audition head` to try the patches.
+
+# Rule 1/13: the players' page audio (apps/altered-web/playground), on wasm only. If upstream adds a wasm32 table of its
+# own, this one stays separate (cargo merges them).
+- file: src-tauri/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\naltered-playground = { path = \"../apps/altered-web/playground\" }\n"
+
+# Rules 2-8/13: playback, file preview and recording without threads. Each player's `run` (its thread: open the
+# device, start the render, decode or disk work, wait until stopped) is left out on wasm for web.rs's, which sets up
+# the same way and returns; `std` comes from altered-playground, so the `thread::Builder::spawn` that starts `run` runs
+# it at once and the caller's wait for "ready" is already answered. If upstream renames `run` or splits it, follow it
+# in web.rs (which uses the same names: has_room, render_block, mix, file_fill, fill, TakeWriter, LiveTap, MonitorMix)
+# and keep each `run` here cfg'd out.
+- file: src-tauri/src/engine/transport.rs
+  find: '^fn run\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src-tauri/src/engine/transport.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: playback without threads (patches/audition.yaml).\n#[cfg(target_arch = \"wasm32\")] mod web;\n#[cfg(target_arch = \"wasm32\")] use web::run;\n#[cfg(target_arch = \"wasm32\")] use altered_playground::std;\n"
+- file: src-tauri/src/engine/preview.rs
+  find: '^fn run\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src-tauri/src/engine/preview.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: file preview without threads (patches/audition.yaml).\n#[cfg(target_arch = \"wasm32\")] mod web;\n#[cfg(target_arch = \"wasm32\")] use web::run;\n#[cfg(target_arch = \"wasm32\")] use altered_playground::std;\n"
+- file: src-tauri/src/engine/record.rs
+  find: '^fn run\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src-tauri/src/engine/record.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: recording from the page's microphone without threads (patches/audition.yaml).\n#[cfg(target_arch = \"wasm32\")] mod web;\n#[cfg(target_arch = \"wasm32\")] use web::run;\n#[cfg(target_arch = \"wasm32\")] use altered_playground::std;\n"
+# Recorder::stop joins each input's thread for its takes; web.rs's run returned before recording began, so its takes
+# are finished here instead, just before stop looks at what it got (its `match first_err`).
+- file: src-tauri/src/engine/record.rs
+  find: '^[ \t]*match first_err \{'
+  before: "        #[cfg(target_arch = \"wasm32\")]\n        web::finish(&mut takes, &mut first_err);\n"
+
+# Rules 9-11/13: where things go in Files. An unsaved session's takes go to /Recordings, not the cache (which lives only
+# as long as the page); new sessions start at the top of Files, each in its own folder; libraries go in /Libraries.
+- file: src-tauri/src/commands/record.rs
+  find: '^[ \t]*None => Ok\(crate::commands::cache::cache_root\(app\)\?\.join\("recordings"\)\),'
+  before: "        // Playground's browser build: in Files, so the takes outlive the page (patches/audition.yaml).\n        #[cfg(target_arch = \"wasm32\")]\n        None => Ok(PathBuf::from(\"/Recordings\")),\n        #[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src-tauri/src/commands/session.rs
+  find: 'pub fn session_default_folder\([^)]*\)[^{]*\{'
+  after: "\n    // Playground's browser build: at the top of Files, each session in its own folder (patches/audition.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    return Ok(PathBuf::from(\"/\"));"
+- file: src-tauri/src/commands/library.rs
+  find: 'pub fn library_default_root\([^)]*\)[^{]*\{'
+  after: "\n    // Playground's browser build: in Files (patches/audition.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    return Ok(PathBuf::from(\"/Libraries\"));"
+
+# Rules 12-13/13: Help > About shows Retake's logo and says what it is based on (build-web.sh renames the rest).
+- file: src/app/AboutDialog.svelte
+  find: 'import logo from "[^"]*";'
+  replace: 'import logo from "../../apps/altered-web/logo.svg";'
+- file: src/app/AboutDialog.svelte
+  find: '<p class="version">.*</p>'
+  after: "\n    <p>Based on Altered Audio Editor by The GeekCast Radio Network, built for the browser by Playground.</p>"

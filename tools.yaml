@@ -138,6 +138,25 @@ groups:
         accent: "#9999FF"
         base: "#00005B"
 
+      - slug: audition
+        name: Retake
+        alternative: Audition
+        blurb: Multitrack and waveform audio editing for podcasts and voiceover.
+        # Altered Audio Editor, renamed: its name and logo are its authors' trademarks (patches/audition.yaml). Its own
+        # sessions and .sesx sessions; audio files and zips of them import. Upstream's releases are desktop packages
+        # only, so like Pro Wave it has the head channel only; patches/audition.yaml adds the web build.
+        opens: [altaudio, sesx]
+        imports: [wav, wave, aif, aiff, aifc, flac, mp3, m4a, aac, alac, ogg, oga, opus, zip]
+        repo: geekcastradio/altered-audio-editor
+        license: GPL-3.0-or-later
+        # What the web build compiles (package-lock.json: the interface's dependencies): docs, CI and release commits
+        # don't rebuild it. One GitHub API request per path per check.
+        paths: [src, src-tauri, package-lock.json]
+        patches: patches/audition.yaml
+        icon: icons/retake.svg
+        accent: "#35D0AE"
+        base: "#0B2A24"
+
       - slug: acrobat
         name: PdfCraft
         alternative: Acrobat Pro

@@ -1,0 +1,2816 @@
+diff --git a/Cargo.lock b/Cargo.lock
+new file mode 100644
+index 0000000..5e4b79b
+--- /dev/null
++++ b/Cargo.lock
+@@ -0,0 +1 @@
++# Playground: build.mjs reads the wasm-bindgen version from here; this build uses none (scripts/build-web.sh).
+diff --git a/apps/altered-web/.cargo/config.toml b/apps/altered-web/.cargo/config.toml
+new file mode 100644
+index 0000000..fc97f71
+--- /dev/null
++++ b/apps/altered-web/.cargo/config.toml
+@@ -0,0 +1,3 @@
++# Wasm SIMD for the back end's DSP, as Playground builds its other apps (scripts/build.mjs SIMD).
++[target.wasm32-wasip1]
++rustflags = ["-Ctarget-feature=+simd128"]
+diff --git a/apps/altered-web/Cargo.toml b/apps/altered-web/Cargo.toml
+new file mode 100644
+index 0000000..5d8384a
+--- /dev/null
++++ b/apps/altered-web/Cargo.toml
+@@ -0,0 +1,38 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# back end in src-tauri as a WASI module the page runs (apps/altered-web/js), with Tauri replaced by stand-ins/.
++# scripts/build-web.sh builds it for wasm32-wasip1 and the interface around it with Vite.
++[package]
++name = "altered-web"
++version = "0.1.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[lib]
++crate-type = ["cdylib"]
++
++[dependencies]
++altered-audio-editor = { path = "../../src-tauri" }
++altered-playground = { path = "playground" }
++tauri = { path = "stand-ins/tauri" }
++tauri-plugin-dialog = { path = "stand-ins/tauri-plugin-dialog" }
++serde_json = "1"
++
++[workspace]
++
++[patch.crates-io]
++tauri = { path = "stand-ins/tauri" }
++tauri-build = { path = "stand-ins/tauri-build" }
++tauri-plugin-dialog = { path = "stand-ins/tauri-plugin-dialog" }
++tauri-plugin-opener = { path = "stand-ins/tauri-plugin-opener" }
++tauri-plugin-updater = { path = "stand-ins/tauri-plugin-updater" }
++libloading = { path = "stand-ins/libloading" }
++# src-tauri's own patch, which only its workspace sees.
++opus-decoder = { path = "../../src-tauri/vendor/opus-decoder" }
++
++[profile.release]
++opt-level = 3
++debug = false
++panic = "abort"
++codegen-units = 1
++lto = true
+diff --git a/apps/altered-web/js/audio-worklet.js b/apps/altered-web/js/audio-worklet.js
+new file mode 100644
+index 0000000..361a2fe
+--- /dev/null
++++ b/apps/altered-web/js/audio-worklet.js
+@@ -0,0 +1,77 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Altered Audio Editor in Playground (patches/audition.yaml in github.com/daijro/openplayground): the speakers and the
++// microphone, on the audio thread. Blocks come from the back end's worker (worker.js) through the port the page hands
++// over, about a tenth of a second ahead; the microphone's go back to it in blocks of 2048 frames. The page wakes it
++// ({ wake }) when something starts playing or recording.
++const AHEAD = 4096
++const MIC = 2048
++
++class Altered extends AudioWorkletProcessor {
++  constructor() {
++    super()
++    this.worker = null
++    this.queue = []
++    this.at = 0
++    this.buffered = 0
++    this.asked = false
++    this.idle = true
++    this.mic = new Float32Array(MIC * 2)
++    this.micAt = 0
++    this.port.onmessage = ({ data }) => {
++      if (data.worker) {
++        this.worker = data.worker
++        this.worker.onmessage = ({ data }) => this.fromWorker(data)
++      }
++      if (data.wake) this.idle = false
++    }
++  }
++  fromWorker(data) {
++    this.asked = false
++    if (data.block) {
++      this.queue.push(data.block)
++      this.buffered += data.block.length / 2
++    }
++    if (data.idle) this.idle = true
++  }
++  process(inputs, outputs) {
++    const out = outputs[0]
++    const frames = out[0].length
++    // The microphone, when it is connected.
++    const input = inputs[0]
++    if (input?.length && this.worker) {
++      const l = input[0]
++      const r = input[1] ?? l
++      for (let i = 0; i < l.length; i++) {
++        this.mic[this.micAt++] = l[i]
++        this.mic[this.micAt++] = r[i]
++        if (this.micAt === this.mic.length) {
++          this.worker.postMessage({ mic: this.mic }, [this.mic.buffer])
++          this.mic = new Float32Array(MIC * 2)
++          this.micAt = 0
++        }
++      }
++    }
++    for (let i = 0; i < frames; i++) {
++      const block = this.queue[0]
++      if (!block) {
++        out[0][i] = 0
++        out[1][i] = 0
++        continue
++      }
++      out[0][i] = block[this.at++]
++      out[1][i] = block[this.at++]
++      this.buffered--
++      if (this.at === block.length) {
++        this.queue.shift()
++        this.at = 0
++      }
++    }
++    if (!this.idle && !this.asked && this.worker && this.buffered < AHEAD) {
++      this.asked = true
++      this.worker.postMessage({ need: AHEAD - this.buffered })
++    }
++    return true
++  }
++}
++
++registerProcessor('altered', Altered)
+diff --git a/apps/altered-web/js/backend.js b/apps/altered-web/js/backend.js
+new file mode 100644
+index 0000000..55416c6
+--- /dev/null
++++ b/apps/altered-web/js/backend.js
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Altered Audio Editor in Playground (patches/audition.yaml in github.com/daijro/openplayground): the back end, a
++// WASI module (apps/altered-web/src/lib.rs), started on the page's files (wasi.js). `call` runs one command at once.
++import { Files, WasiExit, wasi } from './wasi.js'
++
++export const files = new Files()
++
++/** Starts the back end from the module (compiled, its bytes or a fetch Response); `host(what, payload)` gets its events. */
++export async function start(source, host) {
++  const { imports, setMemory } = wasi(files)
++  const decoder = new TextDecoder()
++  let exports
++  const text = (ptr, len) => decoder.decode(new Uint8Array(exports.memory.buffer, ptr, len).slice())
++  const env = {
++    wasi_snapshot_preview1: imports,
++    playground: {
++      host: (w, wl, j, jl) => host(text(w, wl), JSON.parse(text(j, jl) || 'null')),
++    },
++  }
++  source = await source
++  const instance =
++    source instanceof WebAssembly.Module
++      ? await WebAssembly.instantiate(source, env)
++      : (source instanceof Response ? await WebAssembly.instantiateStreaming(source, env) : await WebAssembly.instantiate(source, env)).instance
++  exports = instance.exports
++  setMemory(exports.memory)
++  exports._initialize?.()
++  exports.pg_start()
++  return new Backend(exports)
++}
++
++class Backend {
++  constructor(exports) {
++    this.x = exports
++    this.encoder = new TextEncoder()
++    this.decoder = new TextDecoder()
++  }
++  /** `bytes` in the module's memory for `f(ptr, len)`. */
++  with(bytes, f) {
++    const ptr = this.x.pg_alloc(bytes.length)
++    new Uint8Array(this.x.memory.buffer, ptr, bytes.length).set(bytes)
++    try {
++      return f(ptr, bytes.length)
++    } finally {
++      this.x.pg_free(ptr, bytes.length)
++    }
++  }
++  reply() {
++    return new Uint8Array(this.x.memory.buffer, this.x.pg_reply_ptr(), this.x.pg_reply_len()).slice()
++  }
++  /** One command (its arguments as an object or JSON): { ok, value } (JSON, or an ArrayBuffer for bytes) or
++   * { ok: false, error }; null if unknown. */
++  call(cmd, args) {
++    const c = this.encoder.encode(cmd)
++    const a = this.encoder.encode(typeof args === 'string' ? args : JSON.stringify(args ?? {}))
++    let tag
++    try {
++      tag = this.with(c, (cp, cl) => this.with(a, (ap, al) => this.x.pg_invoke(cp, cl, ap, al)))
++    } catch (e) {
++      if (e instanceof WasiExit) throw e
++      // A panic (or any trap) leaves the module unusable: say so rather than carry on with half-done state.
++      throw new Error(`${cmd} crashed: ${e.message}`, { cause: e })
++    }
++    const bytes = this.reply()
++    if (tag === 3) return null
++    if (tag === 1) return { ok: true, value: bytes.buffer }
++    const value = bytes.length ? JSON.parse(this.decoder.decode(bytes)) : null
++    return tag === 0 ? { ok: true, value } : { ok: false, error: value }
++  }
++  /** The file dialog the last call asked for, or null. */
++  question() {
++    return this.x.pg_question() ? JSON.parse(this.decoder.decode(this.reply())) : null
++  }
++  answer(paths) {
++    this.with(this.encoder.encode(JSON.stringify(paths)), (p, l) => this.x.pg_answer(p, l))
++  }
++  forgetAnswers() {
++    this.x.pg_forget_answers()
++  }
++  playing() {
++    return !!this.x.pg_playing()
++  }
++  recording() {
++    return !!this.x.pg_recording()
++  }
++  /** Hands the back end a block of the microphone: `fill(view)` writes `frames` interleaved stereo frames. */
++  capture(frames, fill) {
++    const ptr = this.x.pg_capture(frames)
++    fill(new Float32Array(this.x.memory.buffer, ptr, frames * 2))
++    this.x.pg_captured()
++  }
++  /** The next `frames` of audio, interleaved stereo (a view into the module's memory: copy it out at once). */
++  render(frames) {
++    const ptr = this.x.pg_render(frames)
++    return new Float32Array(this.x.memory.buffer, ptr, frames * 2)
++  }
++}
+diff --git a/apps/altered-web/js/playground.js b/apps/altered-web/js/playground.js
+new file mode 100644
+index 0000000..49cca43
+--- /dev/null
++++ b/apps/altered-web/js/playground.js
+@@ -0,0 +1,300 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Altered Audio Editor in Playground (patches/audition.yaml in github.com/daijro/openplayground): the page's side of
++// the back end, which runs in a worker (worker.js). The tauri-*.js modules stand in for @tauri-apps/api and come here.
++//
++//   Files      `/` in the back end is Playground's Files (globalThis.playgroundFiles): listed at start, a file's bytes
++//              loaded when a command reaches for them (the command then runs again), and what a command writes,
++//              creates or removes there mirrored back. Files is one flat list, and the app keeps sessions in folders
++//              (their media, recordings and exports beside them), so a path's folders go in the name: /Show/Audio/a.wav
++//              is "Show › Audio › a.wav" in Files. /.app is the app's own: its settings (/.app/config) are kept in
++//              this browser's localStorage, its cache and autosaves only while the page is open. What is saved in
++//              /Download to device (Save As > Download to device) is downloaded instead, and never kept in Files.
++//   Dialogs    a command's file dialog is Playground's Open or Save As; the command then runs again with the answer
++//              (stand-ins/tauri-plugin-dialog). Files from the computer, opened or dropped, are kept in Files, so a
++//              session that uses them still finds them next time.
++//   Audio      one AudioContext at the back end's rate, whose AudioWorklet (audio-worklet.js) gets its blocks from the
++//              worker and gives it the microphone's while something records or meters an armed track (the browser
++//              asks for the microphone the first time).
++
++const CONFIG = '/.app/config'
++const DOWNLOADS = '/Download to device'
++const CONFIG_KEY = 'altered-audio-editor:config'
++const RATE = 48000
++
++const pg = () => globalThis.playgroundFiles
++const normalize = (p) => '/' + String(p).split('/').filter((s) => s && s !== '.').join('/')
++const FOLDER = ' › '
++/** A Files path (browser:/Show › a.wav) as the back end's (/Show/a.wav), or null for anything else. */
++const fromApp = (p) =>
++  typeof p === 'string' && p.startsWith('browser:') ? normalize(p.slice('browser:'.length).split(/\/|\s›\s/).join('/')) : null
++const toApp = (p) => `browser:/${p.slice(1).split('/').join(FOLDER)}`
++const baseName = (p) => p.split('/').pop()
++const parentOf = (p) => p.slice(0, p.lastIndexOf('/')) || '/'
++
++// Playground's prelude cancels the browser's own Ctrl+key actions (page-prelude.js) and leaves the key to the app, but
++// this app's keymap passes over keys something else cancelled (src/keymap/dispatch.ts). Right after the prelude, the
++// event says it isn't cancelled until the app cancels it itself; the browser's action stays cancelled.
++addEventListener(
++  'keydown',
++  (e) => {
++    if (!e.defaultPrevented) return
++    let cancelled = false
++    Object.defineProperty(e, 'defaultPrevented', { get: () => cancelled })
++    Object.defineProperty(e, 'preventDefault', { value: () => ((cancelled = true), Event.prototype.preventDefault.call(e)) })
++  },
++  true,
++)
++
++// Below Playground's bar (shell.css sets --pg-bar), as the shell places canvas apps.
++document.head.append(Object.assign(document.createElement('style'), { textContent: '#app { position: fixed; inset: var(--pg-bar, 0px) 0 0 0; height: auto !important; }' }))
++
++const listeners = new Map()
++/** Events from the back end and the page, as Tauri's `listen` gets them. */
++export function on(event, handler) {
++  if (!listeners.has(event)) listeners.set(event, new Set())
++  listeners.get(event).add(handler)
++  return () => listeners.get(event)?.delete(handler)
++}
++let eventId = 0
++export function dispatch(event, payload) {
++  for (const h of listeners.get(event) ?? []) {
++    try {
++      h({ event, id: ++eventId, payload })
++    } catch (e) {
++      console.error(e)
++    }
++  }
++}
++
++function host(what, payload) {
++  if (what.startsWith('event:')) return dispatch(what.slice(6), payload)
++  if (what === 'set-title') {
++    document.title = String(payload)
++    // "<name> * - <app>" while the session has unsaved changes: Playground's leave warning follows it.
++    pg()?.setUnsaved(/ \* - /.test(String(payload)))
++  } else if (what === 'open-url') window.open(String(payload), '_blank', 'noopener')
++  else if (what === 'exit') location.href = '/'
++  else if (what === 'restart') location.reload()
++}
++
++// Paths the back end has (stubs and files), to name new ones without clashes.
++const known = new Set()
++
++const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' })
++const pending = new Map()
++let nextId = 0
++let started
++const ready = new Promise((resolve, reject) => (started = { resolve, reject }))
++worker.onmessage = ({ data }) => {
++  if (data.id !== undefined) {
++    pending.get(data.id)?.(data)
++    pending.delete(data.id)
++  } else if (data.host) host(data.host, data.payload)
++  else if (data.started) started.resolve()
++  else if (data.failed) started.reject(new Error(data.failed))
++  else if (data.recording === false) microphone(false)
++}
++worker.onerror = (e) => started.reject(new Error(`the back end's worker failed: ${e.message}`))
++worker.onerror = (e) => started.reject(new Error(`the back end's worker failed: ${e.message}`))
++const put = (path, bytes, note = false) => {
++  known.add(path)
++  worker.postMessage({ put: true, path, bytes, note })
++}
++
++;(async () => {
++  const config = []
++  try {
++    for (const [path, text] of Object.entries(JSON.parse(localStorage.getItem(CONFIG_KEY) ?? '{}'))) config.push([path, new TextEncoder().encode(text)])
++  } catch (e) {
++    console.warn('settings could not be restored', e)
++  }
++  const stubs = []
++  for (const p of (await pg()?.files('browser:/')) ?? []) {
++    const path = fromApp(p)
++    if (path && !path.startsWith('/.app/')) stubs.push(path)
++  }
++  stubs.forEach((p) => known.add(p))
++  // Compiled here, where Playground's loader unpacks the .wasm (page-prelude.js), and run in the worker.
++  const module = await WebAssembly.compileStreaming(fetch(new URL('altered.wasm', document.baseURI)))
++  worker.postMessage({ start: true, module, stubs, puts: config })
++  await ready
++  pg()?.onOpen((file) => openFile(file))
++})().catch((e) => {
++  console.error('the back end did not start', e)
++  started.reject(e)
++})
++
++/** Mirrors what a command changed: Files, the app's settings and its downloads. */
++function mirror(changes) {
++  let config = null
++  for (const { path, dir, bytes } of changes) {
++    if (bytes || dir) known.add(path)
++    else known.delete(path)
++    if (path === CONFIG || path.startsWith(CONFIG + '/')) {
++      config ??= JSON.parse(localStorage.getItem(CONFIG_KEY) ?? '{}')
++      if (bytes) config[path] = new TextDecoder().decode(bytes)
++      else if (!dir) delete config[path]
++    } else if (path === DOWNLOADS || path.startsWith(DOWNLOADS + '/')) {
++      if (!bytes) continue
++      pg()?.download(baseName(path), bytes)
++      worker.postMessage({ remove: path })
++    } else if (path === '/.app' || path.startsWith('/.app/') || dir) continue
++    else if (bytes) pg()?.write(toApp(path), bytes)
++    else pg()?.remove(toApp(path))
++  }
++  if (config) {
++    try {
++      localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
++    } catch (e) {
++      console.warn('settings could not be saved', e)
++    }
++  }
++}
++
++/** A free path for `name` in `dir`: "name", else "name (2)"... */
++function freePath(dir, name) {
++  const dot = name.lastIndexOf('.')
++  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
++  for (let i = 1; ; i++) {
++    const p = normalize(`${dir}/${i === 1 ? name : `${stem} (${i})${ext}`}`)
++    if (!known.has(p)) return p
++  }
++}
++
++/** Keeps a file from the computer in Files; its path there. */
++function keepImported(name, bytes) {
++  const path = freePath('/', name)
++  put(path, bytes)
++  pg()?.write(toApp(path), bytes)
++  return path
++}
++
++const typesOf = (q) => [...new Set(q.filters.flatMap(([, exts]) => exts).filter((e) => e !== '*').map((e) => e.toLowerCase()))]
++
++/** Shows Playground's dialog for a command's question: the paths it answers, or null when cancelled. */
++async function ask(q) {
++  const types = typesOf(q)
++  if (q.kind === 'open' || q.kind === 'openMany') {
++    const picked = await pg()?.open({ types })
++    if (!picked?.length) return null
++    return picked.map((f) => {
++      const path = fromApp(f.path)
++      if (!path) return keepImported(f.name, f.bytes)
++      put(path, f.bytes)
++      return path
++    })
++  }
++  // A folder is named like a file saved where it goes.
++  const name = q.fileName ?? (q.kind === 'folder' ? q.title?.replace(/\s+to$/i, '') || 'Folder' : 'Untitled')
++  const saved = await pg()?.saveAs({ name, types: q.kind === 'folder' ? [] : types })
++  if (!saved) return null
++  const path = saved.download ? `${DOWNLOADS}/${name}` : fromApp(saved.path)
++  // Its folder may be new (made in the dialog, or the downloads).
++  worker.postMessage({ put: true, path: q.kind === 'folder' ? path : parentOf(path), dir: true })
++  return [path]
++}
++
++const send = (msg) =>
++  new Promise((resolve) => {
++    const id = nextId++
++    pending.set(id, resolve)
++    // As JSON, as Tauri sends them: arguments may be the interface's state proxies, which can't be posted as they are.
++    worker.postMessage({ call: true, id, ...msg, args: JSON.stringify(msg.args ?? {}) })
++  })
++
++/** Runs a command as Tauri's `invoke` does: its result, or a rejection with its error. */
++export async function invoke(cmd, args) {
++  await ready
++  let answer
++  for (let round = 0; ; round++) {
++    // The speakers start in the click or key that plays (browsers allow it only then), not when the reply is in.
++    if (/^(transport_play|preview_play|wave_play|record_start|record_monitor|midi_audition)$/.test(cmd)) audio(false)
++    const out = await send({ cmd, args, answer })
++    answer = undefined
++    mirror(out.changes)
++    if (out.playing) audio(true)
++    if (out.recording) microphone(true)
++    if (out.question) {
++      answer = await ask(out.question)
++      if (answer) continue
++    } else if (out.needed.length && round < 4) {
++      // Files it reached for that weren't loaded yet: load them and run it again.
++      await Promise.all(out.needed.map(async (p) => put(p, await pg().read(toApp(p)))))
++      continue
++    }
++    const r = out.reply
++    if (r === null) throw `Command ${cmd} not found`
++    if (r.crashed) console.error(`${cmd} crashed: ${r.error}`)
++    if (!r.ok) throw r.error
++    return r.value
++  }
++}
++
++let opened = []
++let onOpened = null
++/** A file for the app from Playground (Open in, ?open=): handed to the app as a drop (tauri-webview.js), once it
++ * listens for drops. */
++function openFile({ path, name, bytes }) {
++  const at = fromApp(path)
++  if (at) put(at, bytes)
++  opened.push(at ?? keepImported(name, bytes))
++  if (onOpened) onOpened(opened.splice(0))
++}
++export function whenOpened(f) {
++  onOpened = f
++  if (f && opened.length) f(opened.splice(0))
++}
++
++/** Files dropped from the computer: kept in Files, then their paths go to the app. */
++export async function dropped(list) {
++  const paths = []
++  for (const f of list) paths.push(keepImported(f.name, new Uint8Array(await f.arrayBuffer())))
++  return paths
++}
++
++let ctx = null
++let node = null
++let audioReady = null
++/** The speakers (and the worklet the microphone goes through); `play` wakes the worklet. */
++function audio(play) {
++  if (!ctx) {
++    ctx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' })
++    audioReady = ctx.audioWorklet.addModule(new URL('./audio-worklet.js', import.meta.url)).then(() => {
++      node = new AudioWorkletNode(ctx, 'altered', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] })
++      node.connect(ctx.destination)
++      const channel = new MessageChannel()
++      worker.postMessage({ audio: channel.port1 }, [channel.port1])
++      node.port.postMessage({ worker: channel.port2 }, [channel.port2])
++    })
++  }
++  if (ctx.state !== 'running') ctx.resume()
++  if (play) audioReady.then(() => node.port.postMessage({ wake: true }))
++}
++
++let mic = null
++/** The microphone into the worklet while the back end records or meters (stereo; a mono microphone on both sides). */
++async function microphone(on) {
++  if (!on) {
++    mic?.source?.disconnect()
++    for (const t of mic?.stream?.getTracks() ?? []) t.stop()
++    mic = null
++    return
++  }
++  if (mic) return
++  mic = {}
++  try {
++    const stream = await navigator.mediaDevices.getUserMedia({
++      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } },
++    })
++    audio(false)
++    await audioReady
++    if (!mic) return stream.getTracks().forEach((t) => t.stop())
++    const source = ctx.createMediaStreamSource(stream)
++    source.connect(node)
++    mic = { stream, source }
++  } catch (e) {
++    mic = null
++    console.warn('no microphone', e)
++    alert(`Recording needs the microphone: ${e.message}`)
++  }
++}
+diff --git a/apps/altered-web/js/tauri-core.js b/apps/altered-web/js/tauri-core.js
+new file mode 100644
+index 0000000..16f0c89
+--- /dev/null
++++ b/apps/altered-web/js/tauri-core.js
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// @tauri-apps/api/core for Playground's browser build of Altered Audio Editor (patches/audition.yaml in
++// github.com/daijro/openplayground): commands go to the back end on this page (playground.js).
++export { invoke } from './playground.js'
++
++/** The app runs as on the desktop, with this page as its window. */
++export const isTauri = () => true
+diff --git a/apps/altered-web/js/tauri-event.js b/apps/altered-web/js/tauri-event.js
+new file mode 100644
+index 0000000..f829b9d
+--- /dev/null
++++ b/apps/altered-web/js/tauri-event.js
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// @tauri-apps/api/event for Playground's browser build of Altered Audio Editor (patches/audition.yaml in
++// github.com/daijro/openplayground): the back end's events (playground.js).
++import { dispatch, on } from './playground.js'
++
++export const listen = async (event, handler) => on(event, handler)
++
++export const once = async (event, handler) => {
++  const off = on(event, (e) => {
++    off()
++    handler(e)
++  })
++  return off
++}
++
++export const emit = async (event, payload) => dispatch(event, payload)
+diff --git a/apps/altered-web/js/tauri-webview.js b/apps/altered-web/js/tauri-webview.js
+new file mode 100644
+index 0000000..e23781a
+--- /dev/null
++++ b/apps/altered-web/js/tauri-webview.js
+@@ -0,0 +1,61 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// @tauri-apps/api/webview for Playground's browser build of Altered Audio Editor (patches/audition.yaml in
++// github.com/daijro/openplayground): files dropped from the computer (kept in Files, playground.js), and
++// files Playground opens in the app, as the window's drag-and-drop events. Positions are in device pixels, as
++// Tauri gives them.
++import { dropped, whenOpened } from './playground.js'
++
++const at = (e) => ({ x: e.clientX * devicePixelRatio, y: e.clientY * devicePixelRatio })
++const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files')
++
++const webview = {
++  size: async () => ({ width: Math.round(innerWidth * devicePixelRatio), height: Math.round(innerHeight * devicePixelRatio) }),
++  async onDragDropEvent(handler) {
++    const send = (payload) => handler({ event: 'tauri://drag-drop', id: 0, payload })
++    let depth = 0
++    const enter = (e) => {
++      if (!hasFiles(e)) return
++      e.preventDefault()
++      if (depth++ === 0) send({ type: 'enter', paths: [], position: at(e) })
++    }
++    const over = (e) => {
++      if (!hasFiles(e)) return
++      e.preventDefault()
++      e.dataTransfer.dropEffect = 'copy'
++      send({ type: 'over', position: at(e) })
++    }
++    const leave = (e) => {
++      if (!hasFiles(e)) return
++      if (--depth <= 0) {
++        depth = 0
++        send({ type: 'leave' })
++      }
++    }
++    const drop = async (e) => {
++      if (!hasFiles(e)) return
++      e.preventDefault()
++      depth = 0
++      const position = at(e)
++      const paths = await dropped([...e.dataTransfer.files])
++      send({ type: 'drop', paths, position })
++    }
++    addEventListener('dragenter', enter)
++    addEventListener('dragover', over)
++    addEventListener('dragleave', leave)
++    addEventListener('drop', drop)
++    // Outside every panel, so the app opens sessions and imports audio as it does for files dropped anywhere.
++    whenOpened((paths) => {
++      send({ type: 'enter', paths, position: { x: -1, y: -1 } })
++      send({ type: 'drop', paths, position: { x: -1, y: -1 } })
++    })
++    return () => {
++      removeEventListener('dragenter', enter)
++      removeEventListener('dragover', over)
++      removeEventListener('dragleave', leave)
++      removeEventListener('drop', drop)
++      whenOpened(null)
++    }
++  },
++}
++
++export const getCurrentWebview = () => webview
+diff --git a/apps/altered-web/js/tauri-window.js b/apps/altered-web/js/tauri-window.js
+new file mode 100644
+index 0000000..1afdbc7
+--- /dev/null
++++ b/apps/altered-web/js/tauri-window.js
+@@ -0,0 +1,11 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// @tauri-apps/api/window for Playground's browser build of Altered Audio Editor (patches/audition.yaml in
++// github.com/daijro/openplayground). Closing the tab can't wait for the app's questions: Playground's leave warning
++// asks instead, while the session has unsaved changes (playground.js).
++const window_ = {
++  onCloseRequested: async () => () => {},
++  setTitle: async (title) => void (document.title = title),
++  minimize: async () => {},
++}
++
++export const getCurrentWindow = () => window_
+diff --git a/apps/altered-web/js/wasi.js b/apps/altered-web/js/wasi.js
+new file mode 100644
+index 0000000..9929512
+--- /dev/null
++++ b/apps/altered-web/js/wasi.js
+@@ -0,0 +1,455 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Altered Audio Editor in Playground (patches/audition.yaml in github.com/daijro/openplayground): the WASI calls its
++// back end makes (wasm32-wasip1), on an in-memory file system. `/` is Playground's Files: what Files holds is listed
++// at start as stubs (path and kind, no bytes), and a stub's bytes come in when the back end needs them (files.js
++// loads them and runs the call again). What the back end writes, creates or removes is noted for files.js to mirror.
++
++const E = { SUCCESS: 0, BADF: 8, EXIST: 20, INVAL: 28, IO: 29, ISDIR: 31, NOENT: 44, NOSYS: 52, NOTDIR: 54, NOTEMPTY: 55 }
++const FILETYPE = { CHAR: 2, DIR: 3, FILE: 4 }
++const OFLAGS = { CREAT: 1, DIRECTORY: 2, EXCL: 4, TRUNC: 8 }
++const FDFLAGS_APPEND = 1
++const RIGHT_WRITE = 1n << 6n
++
++export class WasiExit extends Error {
++  constructor(code) {
++    super(`exit ${code}`)
++    this.code = code
++  }
++}
++
++/** '/a/./b/../c/' -> '/a/c' */
++export const normalize = (path) => {
++  const out = []
++  for (const part of String(path).split('/')) {
++    if (!part || part === '.') continue
++    if (part === '..') out.pop()
++    else out.push(part)
++  }
++  return '/' + out.join('/')
++}
++const parentOf = (p) => (p === '/' ? '/' : normalize(p.slice(0, p.lastIndexOf('/')) || '/'))
++const now = () => BigInt(Date.now()) * 1000000n
++
++/** The files: path -> { dir: true } or { data, size, mtime, stub } (a stub's bytes aren't loaded yet). */
++export class Files {
++  constructor() {
++    this.entries = new Map([['/', { dir: true, mtime: now() }]])
++    /** Paths written, created or removed since the last takeChanges(). */
++    this.changed = new Set()
++    /** Stubs the back end tried to read since the last takeNeeded(). */
++    this.needed = new Set()
++  }
++  get(path) {
++    return this.entries.get(normalize(path))
++  }
++  mkdirs(path, note = true) {
++    path = normalize(path)
++    if (this.entries.get(path)?.dir) return
++    if (path !== '/') this.mkdirs(parentOf(path), note)
++    this.entries.set(path, { dir: true, mtime: now() })
++    if (note) this.changed.add(path)
++  }
++  /** Puts bytes at `path` (from Files, a drop, a picked file): no change is noted unless `note`. */
++  put(path, bytes, note = false) {
++    path = normalize(path)
++    this.mkdirs(parentOf(path), note)
++    this.entries.set(path, { data: bytes, size: bytes.length, mtime: now() })
++    if (note) this.changed.add(path)
++  }
++  /** A file Files has, bytes not loaded. */
++  stub(path) {
++    path = normalize(path)
++    if (this.entries.has(path)) return
++    this.mkdirs(parentOf(path), false)
++    this.entries.set(path, { data: new Uint8Array(0), size: 0, mtime: now(), stub: true })
++  }
++  bytes(path) {
++    const e = this.get(path)
++    return e && !e.dir && !e.stub ? e.data.subarray(0, e.size) : null
++  }
++  remove(path, note = true) {
++    path = normalize(path)
++    for (const p of [...this.entries.keys()]) {
++      if (p === path || p.startsWith(path + '/')) {
++        this.entries.delete(p)
++        if (note) this.changed.add(p)
++      }
++    }
++  }
++  children(dir) {
++    dir = normalize(dir)
++    const prefix = dir === '/' ? '/' : dir + '/'
++    const out = []
++    for (const p of this.entries.keys()) {
++      if (p !== dir && p.startsWith(prefix) && !p.slice(prefix.length).includes('/')) out.push(p.slice(prefix.length))
++    }
++    return out.sort()
++  }
++  takeChanges() {
++    const c = [...this.changed]
++    this.changed.clear()
++    return c
++  }
++  takeNeeded() {
++    const n = [...this.needed]
++    this.needed.clear()
++    return n
++  }
++}
++
++/** The wasi_snapshot_preview1 imports, for `files`; call setMemory once the module is instantiated. */
++export function wasi(files) {
++  let memory
++  const view = () => new DataView(memory.buffer)
++  const bytesAt = (ptr, len) => new Uint8Array(memory.buffer, ptr, len)
++  const decoder = new TextDecoder()
++  const encoder = new TextEncoder()
++  const str = (ptr, len) => decoder.decode(bytesAt(ptr, len).slice())
++  // fd 0-2 are the console, 3 the preopened `/`.
++  const fds = new Map([
++    [0, { stdio: true }],
++    [1, { stdio: true, out: console.log, line: '' }],
++    [2, { stdio: true, out: console.warn, line: '' }],
++    [3, { path: '/', dir: true }],
++  ])
++  let nextFd = 4
++  const resolve = (dirfd, ptr, len) => {
++    const base = fds.get(dirfd)
++    if (!base?.dir) return null
++    return normalize(`${base.path}/${str(ptr, len)}`)
++  }
++  const iovecs = (iovs, n) => {
++    const v = view()
++    const out = []
++    for (let i = 0; i < n; i++) out.push([v.getUint32(iovs + i * 8, true), v.getUint32(iovs + i * 8 + 4, true)])
++    return out
++  }
++  const writeStat = (ptr, e) => {
++    const v = view()
++    for (let i = 0; i < 64; i += 8) v.setBigUint64(ptr + i, 0n, true)
++    v.setUint8(ptr + 16, e.dir ? FILETYPE.DIR : FILETYPE.FILE)
++    v.setBigUint64(ptr + 24, 1n, true)
++    v.setBigUint64(ptr + 32, BigInt(e.dir ? 0 : e.size), true)
++    v.setBigUint64(ptr + 40, e.mtime, true)
++    v.setBigUint64(ptr + 48, e.mtime, true)
++    v.setBigUint64(ptr + 56, e.mtime, true)
++  }
++  const grow = (e, need) => {
++    if (need <= e.data.length) return
++    const next = new Uint8Array(Math.max(need, e.data.length * 2, 4096))
++    next.set(e.data.subarray(0, e.size))
++    e.data = next
++  }
++
++  const imports = {
++    args_get: () => E.SUCCESS,
++    args_sizes_get(argc, bufsize) {
++      view().setUint32(argc, 0, true)
++      view().setUint32(bufsize, 0, true)
++      return E.SUCCESS
++    },
++    environ_get: () => E.SUCCESS,
++    environ_sizes_get(count, bufsize) {
++      view().setUint32(count, 0, true)
++      view().setUint32(bufsize, 0, true)
++      return E.SUCCESS
++    },
++    clock_res_get(id, ptr) {
++      view().setBigUint64(ptr, 1000n, true)
++      return E.SUCCESS
++    },
++    clock_time_get(id, _precision, ptr) {
++      const t = id === 0 ? now() : BigInt(Math.round(performance.now() * 1e6))
++      view().setBigUint64(ptr, t, true)
++      return E.SUCCESS
++    },
++    random_get(ptr, len) {
++      for (let at = 0; at < len; at += 65536) crypto.getRandomValues(bytesAt(ptr + at, Math.min(65536, len - at)))
++      return E.SUCCESS
++    },
++    fd_close(fd) {
++      if (!fds.has(fd)) return E.BADF
++      if (fd > 3) fds.delete(fd)
++      return E.SUCCESS
++    },
++    fd_fdstat_get(fd, ptr) {
++      const f = fds.get(fd)
++      if (!f) return E.BADF
++      const v = view()
++      v.setUint8(ptr, f.stdio ? FILETYPE.CHAR : f.dir ? FILETYPE.DIR : FILETYPE.FILE)
++      v.setUint16(ptr + 2, f.append ? FDFLAGS_APPEND : 0, true)
++      v.setBigUint64(ptr + 8, 0xffffffffffffffffn, true)
++      v.setBigUint64(ptr + 16, 0xffffffffffffffffn, true)
++      return E.SUCCESS
++    },
++    fd_fdstat_set_flags: () => E.SUCCESS,
++    fd_filestat_get(fd, ptr) {
++      const f = fds.get(fd)
++      if (!f) return E.BADF
++      if (f.stdio) {
++        writeStat(ptr, { size: 0, mtime: 0n })
++        view().setUint8(ptr + 16, FILETYPE.CHAR)
++        return E.SUCCESS
++      }
++      const e = files.get(f.path)
++      if (!e) return E.NOENT
++      writeStat(ptr, e)
++      return E.SUCCESS
++    },
++    fd_filestat_set_size(fd, size) {
++      const f = fds.get(fd)
++      const e = f && files.get(f.path)
++      if (!e || e.dir) return E.BADF
++      size = Number(size)
++      grow(e, size)
++      if (size > e.size) e.data.fill(0, e.size, size)
++      e.size = size
++      files.changed.add(f.path)
++      return E.SUCCESS
++    },
++    fd_filestat_set_times: () => E.SUCCESS,
++    fd_prestat_get(fd, ptr) {
++      if (fd !== 3) return E.BADF
++      view().setUint8(ptr, 0)
++      view().setUint32(ptr + 4, 1, true)
++      return E.SUCCESS
++    },
++    fd_prestat_dir_name(fd, ptr, len) {
++      if (fd !== 3) return E.BADF
++      bytesAt(ptr, len).set(encoder.encode('/').subarray(0, len))
++      return E.SUCCESS
++    },
++    fd_read(fd, iovs, n, nread) {
++      const f = fds.get(fd)
++      if (!f) return E.BADF
++      if (f.stdio) {
++        view().setUint32(nread, 0, true)
++        return E.SUCCESS
++      }
++      const e = files.get(f.path)
++      if (!e || e.dir) return e ? E.ISDIR : E.BADF
++      let total = 0
++      for (const [buf, len] of iovecs(iovs, n)) {
++        const pos = Number(f.pos)
++        const k = Math.max(0, Math.min(len, e.size - pos))
++        bytesAt(buf, k).set(e.data.subarray(pos, pos + k))
++        f.pos += BigInt(k)
++        total += k
++        if (k < len) break
++      }
++      view().setUint32(nread, total, true)
++      return E.SUCCESS
++    },
++    fd_pread(fd, iovs, n, offset, nread) {
++      const f = fds.get(fd)
++      if (!f || f.stdio) return E.BADF
++      const keep = f.pos
++      f.pos = offset
++      const r = imports.fd_read(fd, iovs, n, nread)
++      f.pos = keep
++      return r
++    },
++    fd_write(fd, iovs, n, nwritten) {
++      const f = fds.get(fd)
++      if (!f) return E.BADF
++      let total = 0
++      if (f.stdio) {
++        for (const [buf, len] of iovecs(iovs, n)) {
++          f.line += decoder.decode(bytesAt(buf, len).slice(), { stream: true })
++          total += len
++        }
++        const lines = f.line.split('\n')
++        f.line = lines.pop()
++        for (const l of lines) f.out?.(l)
++        view().setUint32(nwritten, total, true)
++        return E.SUCCESS
++      }
++      const e = files.get(f.path)
++      if (!e || e.dir) return E.BADF
++      if (f.append) f.pos = BigInt(e.size)
++      for (const [buf, len] of iovecs(iovs, n)) {
++        const pos = Number(f.pos)
++        grow(e, pos + len)
++        e.data.set(bytesAt(buf, len), pos)
++        if (pos > e.size) e.data.fill(0, e.size, pos)
++        e.size = Math.max(e.size, pos + len)
++        f.pos += BigInt(len)
++        total += len
++      }
++      e.mtime = now()
++      files.changed.add(f.path)
++      view().setUint32(nwritten, total, true)
++      return E.SUCCESS
++    },
++    fd_pwrite(fd, iovs, n, offset, nwritten) {
++      const f = fds.get(fd)
++      if (!f || f.stdio) return E.BADF
++      const keep = f.pos
++      const append = f.append
++      f.pos = offset
++      f.append = false
++      const r = imports.fd_write(fd, iovs, n, nwritten)
++      f.pos = keep
++      f.append = append
++      return r
++    },
++    fd_seek(fd, offset, whence, ptr) {
++      const f = fds.get(fd)
++      if (!f || f.stdio || f.dir) return E.BADF
++      const e = files.get(f.path)
++      const base = whence === 0 ? 0n : whence === 1 ? f.pos : BigInt(e?.size ?? 0)
++      const pos = base + offset
++      if (pos < 0n) return E.INVAL
++      f.pos = pos
++      view().setBigUint64(ptr, pos, true)
++      return E.SUCCESS
++    },
++    fd_tell(fd, ptr) {
++      const f = fds.get(fd)
++      if (!f || f.stdio) return E.BADF
++      view().setBigUint64(ptr, f.pos, true)
++      return E.SUCCESS
++    },
++    fd_sync: () => E.SUCCESS,
++    fd_datasync: () => E.SUCCESS,
++    fd_advise: () => E.SUCCESS,
++    fd_allocate: () => E.SUCCESS,
++    fd_readdir(fd, buf, len, cookie, used) {
++      const f = fds.get(fd)
++      if (!f?.dir) return E.BADF
++      const names = files.children(f.path)
++      let at = 0
++      const v = view()
++      for (let i = Number(cookie); i < names.length && at < len; i++) {
++        const name = encoder.encode(names[i])
++        const e = files.get(`${f.path}/${names[i]}`)
++        const head = new DataView(new ArrayBuffer(24))
++        head.setBigUint64(0, BigInt(i + 1), true)
++        head.setBigUint64(8, BigInt(i + 1), true)
++        head.setUint32(16, name.length, true)
++        head.setUint8(20, e?.dir ? FILETYPE.DIR : FILETYPE.FILE)
++        const entry = new Uint8Array(24 + name.length)
++        entry.set(new Uint8Array(head.buffer))
++        entry.set(name, 24)
++        const k = Math.min(entry.length, len - at)
++        bytesAt(buf + at, k).set(entry.subarray(0, k))
++        at += k
++      }
++      v.setUint32(used, at, true)
++      return E.SUCCESS
++    },
++    path_create_directory(fd, ptr, len) {
++      const path = resolve(fd, ptr, len)
++      if (!path) return E.BADF
++      if (files.get(path)) return E.EXIST
++      if (!files.get(parentOf(path))?.dir) return E.NOENT
++      files.mkdirs(path)
++      return E.SUCCESS
++    },
++    path_filestat_get(fd, _flags, ptr, len, out) {
++      const path = resolve(fd, ptr, len)
++      if (!path) return E.BADF
++      const e = files.get(path)
++      if (!e) return E.NOENT
++      writeStat(out, e)
++      return E.SUCCESS
++    },
++    path_filestat_set_times: () => E.SUCCESS,
++    path_open(dirfd, _dirflags, ptr, len, oflags, rights, _inheriting, fdflags, out) {
++      const path = resolve(dirfd, ptr, len)
++      if (!path) return E.BADF
++      let e = files.get(path)
++      if (e && oflags & OFLAGS.EXCL && oflags & OFLAGS.CREAT) return E.EXIST
++      if (!e) {
++        if (!(oflags & OFLAGS.CREAT)) return E.NOENT
++        if (!files.get(parentOf(path))?.dir) return E.NOENT
++        files.put(path, new Uint8Array(0), true)
++        e = files.get(path)
++      }
++      if (oflags & OFLAGS.DIRECTORY && !e.dir) return E.NOTDIR
++      if (e.stub) {
++        if (oflags & OFLAGS.TRUNC) {
++          files.put(path, new Uint8Array(0), true)
++          e = files.get(path)
++        } else {
++          files.needed.add(path)
++          return E.IO
++        }
++      }
++      if (!e.dir && oflags & OFLAGS.TRUNC) {
++        e.size = 0
++        e.mtime = now()
++        files.changed.add(path)
++      }
++      const fd = nextFd++
++      fds.set(fd, { path, dir: !!e.dir, pos: 0n, append: !!(fdflags & FDFLAGS_APPEND), write: !!(rights & RIGHT_WRITE) })
++      view().setUint32(out, fd, true)
++      return E.SUCCESS
++    },
++    path_readlink: () => E.INVAL,
++    path_symlink: () => E.NOSYS,
++    path_link: () => E.NOSYS,
++    path_remove_directory(fd, ptr, len) {
++      const path = resolve(fd, ptr, len)
++      if (!path) return E.BADF
++      const e = files.get(path)
++      if (!e) return E.NOENT
++      if (!e.dir) return E.NOTDIR
++      if (files.children(path).length) return E.NOTEMPTY
++      files.remove(path)
++      return E.SUCCESS
++    },
++    path_unlink_file(fd, ptr, len) {
++      const path = resolve(fd, ptr, len)
++      if (!path) return E.BADF
++      const e = files.get(path)
++      if (!e) return E.NOENT
++      if (e.dir) return E.ISDIR
++      files.remove(path)
++      return E.SUCCESS
++    },
++    path_rename(fd, ptr, len, fd2, ptr2, len2) {
++      const from = resolve(fd, ptr, len)
++      const to = resolve(fd2, ptr2, len2)
++      if (!from || !to) return E.BADF
++      const e = files.get(from)
++      if (!e) return E.NOENT
++      if (!files.get(parentOf(to))?.dir) return E.NOENT
++      const moved = [...files.entries].filter(([p]) => p === from || p.startsWith(from + '/'))
++      files.remove(to)
++      files.remove(from)
++      for (const [p, entry] of moved) {
++        const q = to + p.slice(from.length)
++        files.entries.set(q, entry)
++        files.changed.add(q)
++      }
++      for (const f of fds.values()) {
++        if (f.path === from || f.path?.startsWith(from + '/')) f.path = to + f.path.slice(from.length)
++      }
++      return E.SUCCESS
++    },
++    // Sleeps end at once: the page can't wait (the players don't sleep here; see altered-playground).
++    poll_oneoff(subs, events, n, nevents) {
++      const v = view()
++      for (let i = 0; i < n; i++) {
++        const s = subs + i * 48
++        const ev = events + i * 32
++        v.setBigUint64(ev, v.getBigUint64(s, true), true)
++        v.setUint16(ev + 8, 0, true)
++        v.setUint8(ev + 10, v.getUint8(s + 8))
++      }
++      v.setUint32(nevents, n, true)
++      return E.SUCCESS
++    },
++    proc_exit(code) {
++      throw new WasiExit(code)
++    },
++    proc_raise: () => E.NOSYS,
++    sched_yield: () => E.SUCCESS,
++    sock_accept: () => E.NOSYS,
++    sock_recv: () => E.NOSYS,
++    sock_send: () => E.NOSYS,
++    sock_shutdown: () => E.NOSYS,
++  }
++  return { imports, setMemory: (m) => (memory = m) }
++}
+diff --git a/apps/altered-web/js/worker.js b/apps/altered-web/js/worker.js
+new file mode 100644
+index 0000000..e12e4f8
+--- /dev/null
++++ b/apps/altered-web/js/worker.js
+@@ -0,0 +1,74 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Altered Audio Editor in Playground (patches/audition.yaml in github.com/daijro/openplayground): the back end in a
++// worker, so the page stays responsive through long work (an hour's export, an effect on a whole file). Messages:
++//
++//   from the page                                     back
++//   { start, module, stubs, puts }                    { started } once running, or { failed }
++//   { call, id, cmd, args, answer? }                  { id, reply, question, needed, changes, playing, recording }
++//   { put, path, bytes, note } or { put, path, dir }  files for the back end (picked, dropped, loaded) and folders
++//   { remove: path }                                  a file the page has downloaded
++//   { audio: port }                                   the AudioWorklet's port (audio-worklet.js), below
++//   and the back end's events, as { event, payload }
++//
++// Audio goes between this worker and the AudioWorklet directly, not through the page: the worklet asks for blocks
++// ({ need }) and gets them ({ block }, or { idle } when nothing plays), and sends the microphone's ({ mic }).
++import { files, start } from './backend.js'
++
++let be = null
++const post = (msg, transfer = []) => postMessage(msg, transfer)
++
++/** What the last call changed in the files, for the page to mirror: each path with its bytes, or null when gone. */
++function changes() {
++  return files.takeChanges().map((path) => {
++    const e = files.get(path)
++    return { path, dir: !!e?.dir, bytes: e && !e.dir && !e.stub ? files.bytes(path).slice() : null }
++  })
++}
++
++function call({ id, cmd, args, answer }) {
++  let reply
++  try {
++    if (answer) be.answer(answer)
++    reply = be.call(cmd, args)
++  } catch (e) {
++    reply = { ok: false, error: String(e.message ?? e), crashed: true }
++  }
++  const out = { id, reply, question: be.question(), needed: files.takeNeeded(), changes: changes(), playing: be.playing(), recording: be.recording() }
++  be.forgetAnswers()
++  post(out, [...(reply?.value instanceof ArrayBuffer ? [reply.value] : []), ...out.changes.flatMap((c) => (c.bytes ? [c.bytes.buffer] : []))])
++}
++
++const BLOCK = 2048
++function audio(port) {
++  port.onmessage = ({ data }) => {
++    if (!be) return
++    if (data.mic) {
++      be.capture(data.mic.length / 2, (view) => view.set(data.mic))
++      // Nothing listens any more (stopped, or the meters closed): the page lets the microphone go.
++      if (!be.recording()) post({ recording: false })
++    }
++    if (data.need) {
++      if (!be.playing()) return port.postMessage({ idle: true, recording: be.recording() })
++      for (let n = 0; n < data.need; n += BLOCK) {
++        const block = be.render(BLOCK).slice()
++        port.postMessage({ block }, [block.buffer])
++      }
++    }
++  }
++}
++
++onmessage = async ({ data }) => {
++  if (data.start) {
++    try {
++      for (const p of data.stubs) files.stub(p)
++      for (const [p, bytes] of data.puts) files.put(p, bytes)
++      be = await start(data.module, (what, payload) => post({ host: what, payload }))
++      post({ started: true })
++    } catch (e) {
++      post({ failed: String(e.message ?? e) })
++    }
++  } else if (data.call) call(data)
++  else if (data.put) data.dir ? files.mkdirs(data.path, false) : files.put(data.path, data.bytes, data.note)
++  else if (data.remove) files.remove(data.remove, false)
++  else if (data.audio) audio(data.audio)
++}
+diff --git a/apps/altered-web/logo.svg b/apps/altered-web/logo.svg
+new file mode 100644
+index 0000000..1d0dd19
+--- /dev/null
++++ b/apps/altered-web/logo.svg
+@@ -0,0 +1,66 @@
++<?xml version="1.0" encoding="UTF-8" standalone="no"?>
++<svg
++   viewBox="0 0 372 134"
++   version="1.1"
++   id="svg7"
++   xmlns="http://www.w3.org/2000/svg"
++   xmlns:svg="http://www.w3.org/2000/svg">
++  <defs
++     id="defs7" />
++  <g
++     transform="translate(18 19) scale(0.1875)"
++     id="g7">
++    <rect
++       x="16"
++       y="16"
++       width="480"
++       height="480"
++       rx="108"
++       fill="#35D0AE"
++       id="rect1" />
++    <g
++       fill="#0B2A24"
++       id="g6">
++      <rect
++         x="104"
++         y="214"
++         width="36"
++         height="84"
++         rx="18"
++         id="rect2" />
++      <rect
++         x="168"
++         y="160"
++         width="36"
++         height="192"
++         rx="18"
++         id="rect3" />
++      <rect
++         x="232"
++         y="112"
++         width="36"
++         height="288"
++         rx="18"
++         id="rect4" />
++      <rect
++         x="296"
++         y="176"
++         width="36"
++         height="160"
++         rx="18"
++         id="rect5" />
++      <rect
++         x="360"
++         y="226"
++         width="36"
++         height="60"
++         rx="18"
++         id="rect6" />
++    </g>
++  </g>
++  <path
++     d="M 131.95508,86 V 47.345703 h 16.42676 q 6.19628,0 8.99121,1.054688 2.82129,1.02832 4.50879,3.691406 1.6875,2.663086 1.6875,6.09082 0,4.350586 -2.55762,7.198242 -2.55762,2.821289 -7.64649,3.559571 2.53125,1.476562 4.16602,3.243164 1.66113,1.766601 4.45605,6.27539 L 166.70703,86 h -9.33398 l -5.64258,-8.411133 q -3.00586,-4.508789 -4.11328,-5.668945 -1.10742,-1.186524 -2.34668,-1.608399 -1.23926,-0.448242 -3.92871,-0.448242 h -1.58203 V 86 Z m 7.80469,-22.306641 h 5.77441 q 5.61621,0 7.01367,-0.474609 1.39746,-0.474609 2.18848,-1.634766 0.79101,-1.160156 0.79101,-2.90039 0,-1.951172 -1.05468,-3.137696 -1.02832,-1.21289 -2.92676,-1.529296 -0.94922,-0.131836 -5.69531,-0.131836 h -6.09082 z m 46.3291,13.394532 7.38281,1.239257 q -1.42383,4.060547 -4.50879,6.196289 -3.05859,2.109375 -7.67285,2.109375 -7.30371,0 -10.81055,-4.77246 -2.76855,-3.823243 -2.76855,-9.650391 0,-6.960938 3.63867,-10.889649 3.63867,-3.955078 9.20215,-3.955078 6.24902,0 9.86133,4.139649 3.6123,4.113281 3.4541,12.629883 h -18.5625 q 0.0791,3.295898 1.79297,5.141601 1.71386,1.819336 4.27148,1.819336 1.74023,0 2.92676,-0.949219 1.18652,-0.949218 1.79297,-3.058593 z m 0.42187,-7.488282 q -0.0791,-3.216797 -1.66113,-4.877929 -1.58203,-1.6875 -3.84961,-1.6875 -2.42578,0 -4.00781,1.766601 -1.58203,1.766602 -1.55567,4.798828 z m 25.23535,-11.601562 v 5.90625 h -5.0625 v 11.285156 q 0,3.427734 0.13184,4.007813 0.1582,0.553711 0.65918,0.922851 0.52734,0.369141 1.26562,0.369141 1.02832,0 2.9795,-0.711914 l 0.63281,5.748047 q -2.58399,1.107421 -5.85352,1.107421 -2.0039,0 -3.6123,-0.659179 -1.6084,-0.685547 -2.37305,-1.740235 -0.73828,-1.081054 -1.02832,-2.90039 -0.2373,-1.291992 -0.2373,-5.220703 V 63.904297 h -3.40137 v -5.90625 h 3.40137 V 52.43457 l 7.43554,-4.324218 v 9.887695 z m 9.67871,8.542969 -6.72363,-1.212891 q 1.13379,-4.060547 3.90235,-6.011719 2.76855,-1.951172 8.22656,-1.951172 4.95703,0 7.38281,1.186524 2.42578,1.160156 3.40137,2.979492 1.00195,1.792969 1.00195,6.618164 l -0.0791,8.648438 q 0,3.691406 0.34277,5.458007 0.36914,1.740235 1.34473,3.744141 h -7.33008 q -0.29004,-0.738281 -0.71191,-2.188477 -0.18457,-0.659179 -0.26367,-0.870117 -1.89844,1.845703 -4.06055,2.768555 -2.16211,0.922851 -4.61426,0.922851 -4.32422,0 -6.8291,-2.346679 -2.47852,-2.34668 -2.47852,-5.932617 0,-2.373047 1.13379,-4.21875 1.13379,-1.872071 3.16406,-2.847657 2.05665,-1.001953 5.90625,-1.740234 5.19434,-0.975586 7.19825,-1.819336 v -0.738281 q 0,-2.135742 -1.05469,-3.032227 -1.05469,-0.922851 -3.98145,-0.922851 -1.97753,0 -3.08496,0.791015 -1.10742,0.764649 -1.79297,2.715821 z m 9.91407,6.011718 q -1.42383,0.47461 -4.50879,1.133789 -3.08496,0.65918 -4.03418,1.291993 -1.4502,1.02832 -1.4502,2.610351 0,1.555664 1.16016,2.689453 1.16016,1.133789 2.95312,1.133789 2.00391,0 3.82325,-1.318359 1.34472,-1.001953 1.7666,-2.452148 0.29004,-0.949219 0.29004,-3.612305 z M 244.65625,86 V 47.345703 h 7.40918 v 20.513672 l 8.6748,-9.861328 h 9.12305 L 260.29199,68.228516 270.54883,86 h -7.98926 l -7.04004,-12.577148 -3.4541,3.612304 V 86 Z m 45.51172,-8.912109 7.38281,1.239257 q -1.42383,4.060547 -4.50879,6.196289 -3.05859,2.109375 -7.67285,2.109375 -7.30371,0 -10.81055,-4.77246 -2.76855,-3.823243 -2.76855,-9.650391 0,-6.960938 3.63867,-10.889649 3.63867,-3.955078 9.20215,-3.955078 6.24902,0 9.86133,4.139649 3.6123,4.113281 3.4541,12.629883 h -18.5625 q 0.0791,3.295898 1.79297,5.141601 1.71386,1.819336 4.27148,1.819336 1.74024,0 2.92676,-0.949219 1.18652,-0.949218 1.79297,-3.058593 z m 0.42187,-7.488282 q -0.0791,-3.216797 -1.66113,-4.877929 -1.58203,-1.6875 -3.84961,-1.6875 -2.42578,0 -4.00781,1.766601 -1.58203,1.766602 -1.55567,4.798828 z"
++     id="text7"
++     style="font-weight:bold;font-size:54px;font-family:Arial;letter-spacing:-1;fill:#edeff2"
++     aria-label="Retake" />
++</svg>
+diff --git a/apps/altered-web/playground/Cargo.toml b/apps/altered-web/playground/Cargo.toml
+new file mode 100644
+index 0000000..565367a
+--- /dev/null
++++ b/apps/altered-web/playground/Cargo.toml
+@@ -0,0 +1,8 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# page's audio for the back end's playback and recording, which run without threads in a browser (see src/lib.rs).
++[package]
++name = "altered-playground"
++version = "0.1.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
+diff --git a/apps/altered-web/playground/src/lib.rs b/apps/altered-web/playground/src/lib.rs
+new file mode 100644
+index 0000000..4fd3297
+--- /dev/null
++++ b/apps/altered-web/playground/src/lib.rs
+@@ -0,0 +1,118 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Altered Audio Editor in the browser, for Playground (patches/audition.yaml in github.com/daijro/openplayground).
++//!
++//! A page has one thread, so the back end's playback and recording can't run on threads of their own. Each player
++//! starts as upstream does, with its `run` in a module `web` beside it: `run` sets the player up, hands [`play`] a
++//! callback that renders what the queues have room for and then plays from them, and returns. The page's audio asks
++//! for each block ([`render`], through apps/altered-web's exports), at [`RATE`] in stereo. Recording is the same the
++//! other way round: [`record`]'s callback gets each block of the page's microphone ([`capture`]).
++//!
++//! [`std`] is the standard library with a `thread` whose `spawn` runs what it's given at once (`run` returns once it
++//! is set up). The players' modules take `std` from here through one line at their end; everything else in them
++//! still comes from the real std.
++use std::cell::RefCell;
++
++/// The page's audio runs at this rate (the browser resamples for the device).
++pub const RATE: u32 = 48_000;
++/// Stereo.
++pub const CHANNELS: usize = 2;
++
++type Player = Box<dyn FnMut(&mut [f32]) -> bool>;
++type Recorder = Box<dyn FnMut(&[f32]) -> bool>;
++
++thread_local! {
++    static PLAYERS: RefCell<Vec<Player>> = RefCell::default();
++    static RECORDERS: RefCell<Vec<Recorder>> = RefCell::default();
++    static SCRATCH: RefCell<Vec<f32>> = RefCell::default();
++}
++
++/// Gives `take` each block of the microphone (interleaved stereo at [`RATE`]) until it returns false.
++pub fn record(take: impl FnMut(&[f32]) -> bool + 'static) {
++    RECORDERS.with_borrow_mut(|r| r.push(Box::new(take)));
++}
++
++/// Whether anything listens to the microphone.
++pub fn recording() -> bool {
++    RECORDERS.with_borrow(|r| !r.is_empty())
++}
++
++/// The microphone's next block.
++pub fn capture(block: &[f32]) {
++    let mut recorders = RECORDERS.take();
++    recorders.retain_mut(|take| take(block));
++    RECORDERS.with_borrow_mut(|r| recorders.append(r));
++    RECORDERS.set(recorders);
++}
++
++/// Plays `fill`'s blocks (interleaved stereo at [`RATE`], zeroed before each call) until it returns false.
++pub fn play(fill: impl FnMut(&mut [f32]) -> bool + 'static) {
++    PLAYERS.with_borrow_mut(|p| p.push(Box::new(fill)));
++}
++
++/// Whether anything plays.
++pub fn playing() -> bool {
++    PLAYERS.with_borrow(|p| !p.is_empty())
++}
++
++/// The next block: every player's, added up.
++pub fn render(out: &mut [f32]) {
++    out.fill(0.0);
++    // Taken out while they run, so a player may start another.
++    let mut players = PLAYERS.take();
++    SCRATCH.with_borrow_mut(|buf| {
++        buf.resize(out.len(), 0.0);
++        players.retain_mut(|fill| {
++            buf.fill(0.0);
++            let more = fill(buf);
++            for (o, s) in out.iter_mut().zip(buf.iter()) {
++                *o += s;
++            }
++            more
++        });
++    });
++    PLAYERS.with_borrow_mut(|p| players.append(p));
++    PLAYERS.set(players);
++}
++
++pub mod std {
++    pub use ::std::*;
++
++    pub mod thread {
++        pub use ::std::thread::*;
++
++        /// What [`Builder::spawn`] ran, already finished.
++        pub struct JoinHandle<T>(T);
++
++        impl<T> JoinHandle<T> {
++            pub fn join(self) -> ::std::thread::Result<T> {
++                Ok(self.0)
++            }
++            pub fn is_finished(&self) -> bool {
++                true
++            }
++        }
++
++        #[derive(Default)]
++        pub struct Builder;
++
++        impl Builder {
++            pub fn new() -> Self {
++                Builder
++            }
++            pub fn name(self, _name: String) -> Self {
++                self
++            }
++            pub fn stack_size(self, _size: usize) -> Self {
++                self
++            }
++            /// Runs `f` now (see the crate's notes).
++            pub fn spawn<F: FnOnce() -> T, T>(self, f: F) -> ::std::io::Result<JoinHandle<T>> {
++                Ok(JoinHandle(f()))
++            }
++        }
++
++        pub fn spawn<F: FnOnce() -> T, T>(f: F) -> JoinHandle<T> {
++            JoinHandle(f())
++        }
++    }
++}
+diff --git a/apps/altered-web/src/lib.rs b/apps/altered-web/src/lib.rs
+new file mode 100644
+index 0000000..2cb06f0
+--- /dev/null
++++ b/apps/altered-web/src/lib.rs
+@@ -0,0 +1,156 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Altered Audio Editor's back end for Playground's browser build (patches/audition.yaml in
++//! github.com/daijro/openplayground): a WASI module the page (apps/altered-web/js/backend.ts) runs. Its exports:
++//!
++//!   pg_start()                          the app's setup (src-tauri's `run`, against the stand-in `tauri` crate)
++//!   pg_alloc(len) / pg_free(ptr, len)   memory for the page's bytes
++//!   pg_invoke(cmd, len, args, len)      a command, its arguments as JSON; 0 JSON, 1 bytes, 2 an error (JSON), 3 no
++//!                                       such command; the reply is at pg_reply_ptr(), pg_reply_len() bytes long
++//!   pg_question()                       the file dialog a command asked for since (JSON, or 0 bytes), see
++//!                                       stand-ins/tauri-plugin-dialog
++//!   pg_answer(json, len)                the paths the next dialog gives
++//!   pg_render(frames) -> ptr            the next block of audio, interleaved stereo f32
++//!   pg_capture(frames) -> ptr           room for the microphone's next block (same layout); then pg_captured()
++//!
++//! and its import: `playground.host(what, len, json, len)` for events, titles, links and quitting.
++use std::cell::RefCell;
++use std::path::PathBuf;
++
++use tauri::__private::{Reply, Value};
++
++#[link(wasm_import_module = "playground")]
++extern "C" {
++    fn host(what: *const u8, what_len: usize, json: *const u8, json_len: usize);
++}
++
++thread_local! {
++    static REPLY: RefCell<Vec<u8>> = RefCell::default();
++    static AUDIO: RefCell<Vec<f32>> = RefCell::default();
++    static MIC: RefCell<Vec<f32>> = RefCell::default();
++}
++
++#[no_mangle]
++pub extern "C" fn pg_start() {
++    tauri::__private::set_host(|what, payload| {
++        let json = payload.to_string();
++        // SAFETY: both point at live bytes for the call; the page copies them before returning.
++        unsafe { host(what.as_ptr(), what.len(), json.as_ptr(), json.len()) }
++    });
++    altered_audio_editor_lib::run();
++}
++
++#[no_mangle]
++pub extern "C" fn pg_alloc(len: usize) -> *mut u8 {
++    let mut v = Vec::<u8>::with_capacity(len.max(1));
++    let p = v.as_mut_ptr();
++    std::mem::forget(v);
++    p
++}
++
++/// # Safety
++/// `ptr` and `len` came from one [`pg_alloc`].
++#[no_mangle]
++pub unsafe extern "C" fn pg_free(ptr: *mut u8, len: usize) {
++    drop(Vec::from_raw_parts(ptr, 0, len.max(1)));
++}
++
++/// # Safety
++/// The page's bytes, from [`pg_alloc`].
++unsafe fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
++    std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).unwrap_or("")
++}
++
++fn set_reply(bytes: Vec<u8>) {
++    REPLY.set(bytes);
++}
++
++/// # Safety
++/// The page's bytes, from [`pg_alloc`].
++#[no_mangle]
++pub unsafe extern "C" fn pg_invoke(cmd: *const u8, cmd_len: usize, args: *const u8, args_len: usize) -> u32 {
++    let cmd = text(cmd, cmd_len);
++    let args: Value = serde_json::from_str(text(args, args_len)).unwrap_or(Value::Null);
++    match tauri::__private::invoke(cmd, &args) {
++        Some(Reply::Json(v)) => {
++            set_reply(v.to_string().into_bytes());
++            0
++        }
++        Some(Reply::Bytes(b)) => {
++            set_reply(b);
++            1
++        }
++        Some(Reply::Err(e)) => {
++            set_reply(e.to_string().into_bytes());
++            2
++        }
++        None => {
++            set_reply(Vec::new());
++            3
++        }
++    }
++}
++
++#[no_mangle]
++pub extern "C" fn pg_reply_ptr() -> *const u8 {
++    REPLY.with_borrow(|r| r.as_ptr())
++}
++
++#[no_mangle]
++pub extern "C" fn pg_reply_len() -> usize {
++    REPLY.with_borrow(|r| r.len())
++}
++
++#[no_mangle]
++pub extern "C" fn pg_question() -> usize {
++    let q = tauri_plugin_dialog::take_question()
++        .and_then(|q| serde_json::to_vec(&q).ok())
++        .unwrap_or_default();
++    let n = q.len();
++    set_reply(q);
++    n
++}
++
++/// # Safety
++/// The page's bytes, from [`pg_alloc`].
++#[no_mangle]
++pub unsafe extern "C" fn pg_answer(json: *const u8, len: usize) {
++    let paths: Vec<PathBuf> = serde_json::from_str(text(json, len)).unwrap_or_default();
++    tauri_plugin_dialog::answer(paths);
++}
++
++#[no_mangle]
++pub extern "C" fn pg_forget_answers() {
++    tauri_plugin_dialog::forget_answers();
++}
++
++#[no_mangle]
++pub extern "C" fn pg_playing() -> u32 {
++    u32::from(altered_playground::playing())
++}
++
++#[no_mangle]
++pub extern "C" fn pg_render(frames: usize) -> *const f32 {
++    AUDIO.with_borrow_mut(|buf| {
++        buf.resize(frames * altered_playground::CHANNELS, 0.0);
++        altered_playground::render(buf);
++        buf.as_ptr()
++    })
++}
++
++#[no_mangle]
++pub extern "C" fn pg_recording() -> u32 {
++    u32::from(altered_playground::recording())
++}
++
++#[no_mangle]
++pub extern "C" fn pg_capture(frames: usize) -> *mut f32 {
++    MIC.with_borrow_mut(|buf| {
++        buf.resize(frames * altered_playground::CHANNELS, 0.0);
++        buf.as_mut_ptr()
++    })
++}
++
++#[no_mangle]
++pub extern "C" fn pg_captured() {
++    MIC.with_borrow(|buf| altered_playground::capture(buf));
++}
+diff --git a/apps/altered-web/stand-ins/libloading/Cargo.toml b/apps/altered-web/stand-ins/libloading/Cargo.toml
+new file mode 100644
+index 0000000..24348c7
+--- /dev/null
++++ b/apps/altered-web/stand-ins/libloading/Cargo.toml
+@@ -0,0 +1,8 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): a page
++# loads no shared libraries, so VST3 plug-ins (src-tauri/plughost) never load. Stands in for the real crate.
++[package]
++name = "libloading"
++version = "0.8.99"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
+diff --git a/apps/altered-web/stand-ins/libloading/src/lib.rs b/apps/altered-web/stand-ins/libloading/src/lib.rs
+new file mode 100644
+index 0000000..a4970db
+--- /dev/null
++++ b/apps/altered-web/stand-ins/libloading/src/lib.rs
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! `Library::new` always fails: there are no plug-ins in a browser.
++use std::ffi::OsStr;
++use std::marker::PhantomData;
++
++#[derive(Debug)]
++pub struct Error;
++
++impl std::fmt::Display for Error {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str("plug-ins can't load in a browser")
++    }
++}
++
++impl std::error::Error for Error {}
++
++pub struct Library;
++
++impl Library {
++    /// # Safety
++    /// None needed: it never loads anything.
++    pub unsafe fn new<P: AsRef<OsStr>>(_path: P) -> Result<Library, Error> {
++        Err(Error)
++    }
++    /// # Safety
++    /// None needed: no library ever opens.
++    pub unsafe fn get<T>(&self, _symbol: &[u8]) -> Result<Symbol<'_, T>, Error> {
++        Err(Error)
++    }
++}
++
++pub struct Symbol<'lib, T>(T, PhantomData<&'lib ()>);
++
++impl<T> std::ops::Deref for Symbol<'_, T> {
++    type Target = T;
++    fn deref(&self) -> &T {
++        &self.0
++    }
++}
+diff --git a/apps/altered-web/stand-ins/tauri-build/Cargo.toml b/apps/altered-web/stand-ins/tauri-build/Cargo.toml
+new file mode 100644
+index 0000000..e8bdc4d
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-build/Cargo.toml
+@@ -0,0 +1,11 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# part of tauri-build its back end uses, standing in for the real crate (see ../tauri).
++[package]
++name = "tauri-build"
++version = "2.99.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[dependencies]
++
+diff --git a/apps/altered-web/stand-ins/tauri-build/src/lib.rs b/apps/altered-web/stand-ins/tauri-build/src/lib.rs
+new file mode 100644
+index 0000000..03e1944
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-build/src/lib.rs
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! The stand-in `tauri` crate needs no generated context (see ../tauri).
++pub fn build() {}
+diff --git a/apps/altered-web/stand-ins/tauri-macros/Cargo.toml b/apps/altered-web/stand-ins/tauri-macros/Cargo.toml
+new file mode 100644
+index 0000000..76f57a5
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-macros/Cargo.toml
+@@ -0,0 +1,16 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground):
++# `#[tauri::command]`, `generate_handler!` and `generate_context!` for the stand-in `tauri` crate beside it.
++[package]
++name = "playground-tauri-macros"
++version = "0.1.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[lib]
++proc-macro = true
++
++[dependencies]
++proc-macro2 = "1"
++quote = "1"
++syn = { version = "2", features = ["full"] }
+diff --git a/apps/altered-web/stand-ins/tauri-macros/src/lib.rs b/apps/altered-web/stand-ins/tauri-macros/src/lib.rs
+new file mode 100644
+index 0000000..0b54f45
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-macros/src/lib.rs
+@@ -0,0 +1,150 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! The stand-in `tauri` crate's macros (see its lib.rs).
++//!
++//! `#[command]` keeps the function and adds `__pg_cmd_<name>(app, args) -> Reply` beside it: each argument comes from
++//! the app (`State<'_, T>`, `AppHandle`, `WebviewWindow`) or from the call's JSON by its camelCase name, as Tauri
++//! passes them; an async command runs to the end at once; the result becomes JSON, the bytes of an `ipc::Response`,
++//! or an error. `generate_handler![a::b::cmd, …]` matches a command's name to its `__pg_cmd_`.
++use proc_macro::TokenStream;
++use quote::{format_ident, quote};
++use syn::parse::Parser;
++use syn::punctuated::Punctuated;
++use syn::{FnArg, GenericArgument, ItemFn, Pat, Path, PathArguments, ReturnType, Token, Type};
++
++fn last_ident(ty: &Type) -> Option<(String, &PathArguments)> {
++    match ty {
++        Type::Path(p) => p.path.segments.last().map(|s| (s.ident.to_string(), &s.arguments)),
++        Type::Reference(r) => last_ident(&r.elem),
++        Type::Paren(p) => last_ident(&p.elem),
++        _ => None,
++    }
++}
++
++fn type_args(args: &PathArguments) -> Vec<&Type> {
++    match args {
++        PathArguments::AngleBracketed(a) => a
++            .args
++            .iter()
++            .filter_map(|g| match g {
++                GenericArgument::Type(t) => Some(t),
++                _ => None,
++            })
++            .collect(),
++        _ => Vec::new(),
++    }
++}
++
++fn camel(name: &str) -> String {
++    let mut out = String::new();
++    let mut up = false;
++    for c in name.trim_start_matches('_').chars() {
++        if c == '_' {
++            up = true;
++        } else if up {
++            out.extend(c.to_uppercase());
++            up = false;
++        } else {
++            out.push(c);
++        }
++    }
++    out
++}
++
++#[proc_macro_attribute]
++pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
++    let f = syn::parse_macro_input!(item as ItemFn);
++    let name = &f.sig.ident;
++    let vis = &f.vis;
++    let wrapper = format_ident!("__pg_cmd_{}", name);
++    let mut lets = Vec::new();
++    let mut names = Vec::new();
++    for (i, arg) in f.sig.inputs.iter().enumerate() {
++        let FnArg::Typed(pt) = arg else { continue };
++        let var = format_ident!("__a{}", i);
++        let key = match &*pt.pat {
++            Pat::Ident(p) => camel(&p.ident.to_string()),
++            _ => String::new(),
++        };
++        let ty = &*pt.ty;
++        let get = match last_ident(ty) {
++            Some((s, args)) if s == "State" => {
++                let inner = type_args(args).into_iter().next();
++                quote! { ::tauri::Manager::state::<#inner>(__app) }
++            }
++            Some((s, _)) if s == "AppHandle" => quote! { ::core::clone::Clone::clone(__app) },
++            Some((s, _)) if s == "WebviewWindow" || s == "Window" => {
++                quote! { ::tauri::Manager::get_webview_window(__app, "main").unwrap_or_default() }
++            }
++            _ => quote! {
++                match ::tauri::__private::arg::<#ty>(__args, #key) {
++                    Ok(v) => v,
++                    Err(e) => return ::tauri::__private::Reply::Err(e.into()),
++                }
++            },
++        };
++        lets.push(quote! { let #var = #get; });
++        names.push(var);
++    }
++    let call = if f.sig.asyncness.is_some() {
++        quote! { ::tauri::__private::block_on(#name(#(#names),*)) }
++    } else {
++        quote! { #name(#(#names),*) }
++    };
++    let bytes = |t: &Type| last_ident(t).is_some_and(|(s, _)| s == "Response");
++    let reply = match &f.sig.output {
++        ReturnType::Default => quote! { { __out; ::tauri::__private::Reply::Json(::tauri::__private::Value::Null) } },
++        ReturnType::Type(_, ty) => match last_ident(ty) {
++            Some((s, args)) if s == "Result" => {
++                let ok = type_args(args).into_iter().next();
++                if ok.is_some_and(bytes) {
++                    quote! { match __out { Ok(r) => ::tauri::__private::Reply::Bytes(r.into_bytes()), Err(e) => ::tauri::__private::Reply::error(e) } }
++                } else {
++                    quote! { match __out { Ok(v) => ::tauri::__private::Reply::json(&v), Err(e) => ::tauri::__private::Reply::error(e) } }
++                }
++            }
++            _ if bytes(ty) => quote! { ::tauri::__private::Reply::Bytes(__out.into_bytes()) },
++            _ => quote! { ::tauri::__private::Reply::json(&__out) },
++        },
++    };
++    quote! {
++        #f
++        #[doc(hidden)]
++        #[allow(clippy::all, unused_variables, unreachable_code)]
++        #vis fn #wrapper(__app: &::tauri::AppHandle, __args: &::tauri::__private::Value) -> ::tauri::__private::Reply {
++            #(#lets)*
++            let __out = #call;
++            #reply
++        }
++    }
++    .into()
++}
++
++#[proc_macro]
++pub fn generate_handler(input: TokenStream) -> TokenStream {
++    let paths = match Punctuated::<Path, Token![,]>::parse_terminated.parse(input) {
++        Ok(p) => p,
++        Err(e) => return e.to_compile_error().into(),
++    };
++    let arms = paths.iter().map(|p| {
++        let mut w = p.clone();
++        let last = w.segments.last_mut().expect("a command path");
++        let name = last.ident.to_string();
++        last.ident = format_ident!("__pg_cmd_{}", last.ident);
++        quote! { #name => ::core::option::Option::Some(#w(__app, __args)), }
++    });
++    quote! {{
++        fn __pg_handler(__cmd: &str, __app: &::tauri::AppHandle, __args: &::tauri::__private::Value) -> ::core::option::Option<::tauri::__private::Reply> {
++            match __cmd {
++                #(#arms)*
++                _ => ::core::option::Option::None,
++            }
++        }
++        __pg_handler as ::tauri::__private::Handler
++    }}
++    .into()
++}
++
++#[proc_macro]
++pub fn generate_context(_input: TokenStream) -> TokenStream {
++    quote! { ::tauri::Context::default() }.into()
++}
+diff --git a/apps/altered-web/stand-ins/tauri-plugin-dialog/Cargo.toml b/apps/altered-web/stand-ins/tauri-plugin-dialog/Cargo.toml
+new file mode 100644
+index 0000000..51ddf83
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-plugin-dialog/Cargo.toml
+@@ -0,0 +1,12 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# part of tauri-plugin-dialog its back end uses, standing in for the real crate (see ../tauri).
++[package]
++name = "tauri-plugin-dialog"
++version = "2.99.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[dependencies]
++tauri = { path = "../tauri" }
++serde = { version = "1", features = ["derive"] }
+diff --git a/apps/altered-web/stand-ins/tauri-plugin-dialog/src/lib.rs b/apps/altered-web/stand-ins/tauri-plugin-dialog/src/lib.rs
+new file mode 100644
+index 0000000..55d24a4
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-plugin-dialog/src/lib.rs
+@@ -0,0 +1,128 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! File dialogs for the page to show (see ../tauri). A dialog can't wait for the page inside a command, so the first
++//! call gives the cancel answer and leaves the question in [`take_question`]; the page shows Playground's dialog and,
++//! unless it was cancelled, gives the answer ([`answer`]) and calls the same command again, whose dialog now has it.
++use std::cell::RefCell;
++use std::collections::VecDeque;
++use std::path::{Path, PathBuf};
++
++use serde::Serialize;
++
++pub fn init() -> tauri::Plugin {
++    tauri::Plugin
++}
++
++/// What a dialog asks, for the page.
++#[derive(Debug, Clone, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub struct Question {
++    /// open, openMany, folder or save.
++    pub kind: &'static str,
++    pub title: Option<String>,
++    /// The extensions each filter takes ("*" for any).
++    pub filters: Vec<(String, Vec<String>)>,
++    pub file_name: Option<String>,
++    pub directory: Option<PathBuf>,
++}
++
++thread_local! {
++    static QUESTION: RefCell<Option<Question>> = const { RefCell::new(None) };
++    static ANSWERS: RefCell<VecDeque<Vec<PathBuf>>> = const { RefCell::new(VecDeque::new()) };
++}
++
++/// The question a dialog asked since the last call.
++pub fn take_question() -> Option<Question> {
++    QUESTION.take()
++}
++
++/// The paths the next dialog gives (one for open, folder and save).
++pub fn answer(paths: Vec<PathBuf>) {
++    ANSWERS.with_borrow_mut(|a| a.push_back(paths));
++}
++
++/// Answers left unused (a command that no longer asks).
++pub fn forget_answers() {
++    ANSWERS.with_borrow_mut(VecDeque::clear);
++}
++
++#[derive(Debug, Clone)]
++pub struct FilePath(PathBuf);
++
++impl FilePath {
++    pub fn as_path(&self) -> Option<&Path> {
++        Some(&self.0)
++    }
++    pub fn into_path(self) -> tauri::Result<PathBuf> {
++        Ok(self.0)
++    }
++}
++
++impl std::fmt::Display for FilePath {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        self.0.display().fmt(f)
++    }
++}
++
++pub struct Dialog;
++
++impl Dialog {
++    pub fn file(&self) -> FileDialogBuilder {
++        FileDialogBuilder(Question { kind: "open", title: None, filters: Vec::new(), file_name: None, directory: None })
++    }
++}
++
++pub trait DialogExt {
++    fn dialog(&self) -> Dialog;
++}
++
++impl DialogExt for tauri::AppHandle {
++    fn dialog(&self) -> Dialog {
++        Dialog
++    }
++}
++
++pub struct FileDialogBuilder(Question);
++
++impl FileDialogBuilder {
++    pub fn set_title(mut self, title: impl Into<String>) -> Self {
++        self.0.title = Some(title.into());
++        self
++    }
++    pub fn add_filter(mut self, name: impl Into<String>, extensions: &[&str]) -> Self {
++        self.0.filters.push((name.into(), extensions.iter().map(|e| e.to_string()).collect()));
++        self
++    }
++    pub fn set_parent<W>(self, _parent: &W) -> Self {
++        self
++    }
++    pub fn set_directory(mut self, directory: impl AsRef<Path>) -> Self {
++        self.0.directory = Some(directory.as_ref().to_path_buf());
++        self
++    }
++    pub fn set_file_name(mut self, name: impl Into<String>) -> Self {
++        self.0.file_name = Some(name.into());
++        self
++    }
++
++    fn ask(mut self, kind: &'static str) -> Option<Vec<FilePath>> {
++        if let Some(paths) = ANSWERS.with_borrow_mut(VecDeque::pop_front) {
++            return Some(paths.into_iter().map(FilePath).collect());
++        }
++        self.0.kind = kind;
++        QUESTION.set(Some(self.0));
++        None
++    }
++
++    pub fn blocking_pick_file(self) -> Option<FilePath> {
++        self.ask("open")?.into_iter().next()
++    }
++    pub fn blocking_pick_files(self) -> Option<Vec<FilePath>> {
++        self.ask("openMany").filter(|p| !p.is_empty())
++    }
++    pub fn blocking_pick_folder(self) -> Option<FilePath> {
++        self.ask("folder")?.into_iter().next()
++    }
++    pub fn blocking_save_file(self) -> Option<FilePath> {
++        self.ask("save")?.into_iter().next()
++    }
++}
+diff --git a/apps/altered-web/stand-ins/tauri-plugin-opener/Cargo.toml b/apps/altered-web/stand-ins/tauri-plugin-opener/Cargo.toml
+new file mode 100644
+index 0000000..26e39f2
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-plugin-opener/Cargo.toml
+@@ -0,0 +1,11 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# part of tauri-plugin-opener its back end uses, standing in for the real crate (see ../tauri).
++[package]
++name = "tauri-plugin-opener"
++version = "2.99.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[dependencies]
++tauri = { path = "../tauri" }
+diff --git a/apps/altered-web/stand-ins/tauri-plugin-opener/src/lib.rs b/apps/altered-web/stand-ins/tauri-plugin-opener/src/lib.rs
+new file mode 100644
+index 0000000..6864ab2
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-plugin-opener/src/lib.rs
+@@ -0,0 +1,30 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Links open in a new tab (see ../tauri); there is no file manager to show a file in.
++use std::path::Path;
++
++pub fn init() -> tauri::Plugin {
++    tauri::Plugin
++}
++
++pub struct Opener;
++
++impl Opener {
++    pub fn open_url(&self, url: impl Into<String>, _with: Option<impl Into<String>>) -> tauri::Result<()> {
++        tauri::__private::host("open-url", &tauri::__private::Value::from(url.into()));
++        Ok(())
++    }
++}
++
++pub trait OpenerExt {
++    fn opener(&self) -> Opener;
++}
++
++impl OpenerExt for tauri::AppHandle {
++    fn opener(&self) -> Opener {
++        Opener
++    }
++}
++
++pub fn reveal_item_in_dir(_path: impl AsRef<Path>) -> tauri::Result<()> {
++    Err(tauri::Error("Files in the browser can't be shown in a file manager.".into()))
++}
+diff --git a/apps/altered-web/stand-ins/tauri-plugin-updater/Cargo.toml b/apps/altered-web/stand-ins/tauri-plugin-updater/Cargo.toml
+new file mode 100644
+index 0000000..9fe6dd1
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-plugin-updater/Cargo.toml
+@@ -0,0 +1,11 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# part of tauri-plugin-updater its back end uses, standing in for the real crate (see ../tauri).
++[package]
++name = "tauri-plugin-updater"
++version = "2.99.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[dependencies]
++tauri = { path = "../tauri" }
+diff --git a/apps/altered-web/stand-ins/tauri-plugin-updater/src/lib.rs b/apps/altered-web/stand-ins/tauri-plugin-updater/src/lib.rs
+new file mode 100644
+index 0000000..03e4354
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri-plugin-updater/src/lib.rs
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Playground serves the newest build, so there is never an update to install (see ../tauri).
++use std::future::Future;
++
++pub struct Builder;
++
++impl Builder {
++    pub fn new() -> Self {
++        Builder
++    }
++    pub fn build(self) -> tauri::Plugin {
++        tauri::Plugin
++    }
++}
++
++impl Default for Builder {
++    fn default() -> Self {
++        Builder
++    }
++}
++
++pub struct Update {
++    pub version: String,
++    pub current_version: String,
++    pub body: Option<String>,
++}
++
++impl Update {
++    pub fn download_and_install<C: FnMut(usize, Option<u64>), D: FnOnce()>(
++        &self,
++        _on_chunk: C,
++        _on_finish: D,
++    ) -> impl Future<Output = tauri::Result<()>> {
++        std::future::ready(Err(tauri::Error("Playground keeps this app up to date.".into())))
++    }
++}
++
++pub struct Updater;
++
++impl Updater {
++    pub fn check(&self) -> impl Future<Output = tauri::Result<Option<Update>>> {
++        std::future::ready(Ok(None))
++    }
++}
++
++pub trait UpdaterExt {
++    fn updater(&self) -> tauri::Result<Updater>;
++}
++
++impl UpdaterExt for tauri::AppHandle {
++    fn updater(&self) -> tauri::Result<Updater> {
++        Ok(Updater)
++    }
++}
+diff --git a/apps/altered-web/stand-ins/tauri/Cargo.toml b/apps/altered-web/stand-ins/tauri/Cargo.toml
+new file mode 100644
+index 0000000..e0dbd6f
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri/Cargo.toml
+@@ -0,0 +1,14 @@
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground): the
++# part of Tauri 2 its back end uses, standing in for the real crate through apps/altered-web's [patch.crates-io].
++# Commands are called from the page (apps/altered-web/src/lib.rs), not over Tauri's IPC.
++[package]
++name = "tauri"
++version = "2.99.0"
++edition = "2021"
++license = "GPL-3.0-or-later"
++publish = false
++
++[dependencies]
++playground-tauri-macros = { path = "../tauri-macros" }
++serde = "1"
++serde_json = "1"
+diff --git a/apps/altered-web/stand-ins/tauri/src/lib.rs b/apps/altered-web/stand-ins/tauri/src/lib.rs
+new file mode 100644
+index 0000000..ce044b8
+--- /dev/null
++++ b/apps/altered-web/stand-ins/tauri/src/lib.rs
+@@ -0,0 +1,322 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Tauri 2 as Altered Audio Editor's back end uses it, for Playground's browser build (patches/audition.yaml in
++//! github.com/daijro/openplayground). The back end compiles unchanged against it: `Builder::run` keeps the command
++//! handler and the managed state instead of opening a window, and the page calls commands through [`__private::invoke`]
++//! (apps/altered-web/src/lib.rs). What a window would do (events, titles, links, quitting) goes to the page through
++//! [`__private::set_host`].
++//!
++//! Files: `/` is Playground's Files (the page mirrors what changes there); the app's own folders are under `/.app`.
++use std::any::{Any, TypeId};
++use std::cell::RefCell;
++use std::collections::HashMap;
++use std::path::PathBuf;
++
++pub use playground_tauri_macros::{command, generate_context, generate_handler};
++
++#[derive(Debug, Clone)]
++pub struct Error(pub String);
++
++impl std::fmt::Display for Error {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str(&self.0)
++    }
++}
++
++impl std::error::Error for Error {}
++
++pub type Result<T> = std::result::Result<T, Error>;
++
++thread_local! {
++    static STATES: RefCell<HashMap<TypeId, &'static dyn Any>> = RefCell::default();
++}
++
++/// A managed value, as a command or [`Manager::state`] gets it.
++pub struct State<'r, T: 'static>(&'r T);
++
++impl<'r, T: 'static> State<'r, T> {
++    pub fn inner(&self) -> &'r T {
++        self.0
++    }
++}
++
++impl<T: 'static> std::ops::Deref for State<'_, T> {
++    type Target = T;
++    fn deref(&self) -> &T {
++        self.0
++    }
++}
++
++impl<T: 'static> Clone for State<'_, T> {
++    fn clone(&self) -> Self {
++        *self
++    }
++}
++
++impl<T: 'static> Copy for State<'_, T> {}
++
++/// The one app (and its one window).
++#[derive(Clone, Copy, Debug, Default)]
++pub struct AppHandle;
++pub type App = AppHandle;
++
++#[derive(Clone, Copy, Debug, Default)]
++pub struct WebviewWindow;
++pub type Window = WebviewWindow;
++
++impl WebviewWindow {
++    pub fn set_title(&self, title: &str) -> Result<()> {
++        __private::host("set-title", &serde_json::Value::from(title));
++        Ok(())
++    }
++    pub fn minimize(&self) -> Result<()> {
++        Ok(())
++    }
++    pub fn label(&self) -> &str {
++        "main"
++    }
++}
++
++/// The app's folders, in the page's file system.
++pub struct PathResolver;
++
++impl PathResolver {
++    fn at(p: &str) -> Result<PathBuf> {
++        Ok(PathBuf::from(p))
++    }
++    fn none(what: &str) -> Result<PathBuf> {
++        Err(Error(format!("no {what} folder in the browser")))
++    }
++    pub fn app_config_dir(&self) -> Result<PathBuf> {
++        Self::at("/.app/config")
++    }
++    pub fn app_data_dir(&self) -> Result<PathBuf> {
++        Self::at("/.app/data")
++    }
++    pub fn app_local_data_dir(&self) -> Result<PathBuf> {
++        Self::at("/.app/data")
++    }
++    pub fn app_cache_dir(&self) -> Result<PathBuf> {
++        Self::at("/.app/cache")
++    }
++    pub fn app_log_dir(&self) -> Result<PathBuf> {
++        Self::at("/.app/logs")
++    }
++    pub fn temp_dir(&self) -> Result<PathBuf> {
++        Self::at("/.app/tmp")
++    }
++    /// Files' top level.
++    pub fn home_dir(&self) -> Result<PathBuf> {
++        Self::at("/")
++    }
++    pub fn document_dir(&self) -> Result<PathBuf> {
++        Self::none("Documents")
++    }
++    pub fn desktop_dir(&self) -> Result<PathBuf> {
++        Self::none("Desktop")
++    }
++    pub fn audio_dir(&self) -> Result<PathBuf> {
++        Self::none("Music")
++    }
++    pub fn download_dir(&self) -> Result<PathBuf> {
++        Self::none("Downloads")
++    }
++}
++
++static PATHS: PathResolver = PathResolver;
++
++pub trait Manager {
++    fn state<T: Send + Sync + 'static>(&self) -> State<'_, T> {
++        self.try_state().unwrap_or_else(|| panic!("{} is not managed", std::any::type_name::<T>()))
++    }
++    fn try_state<T: Send + Sync + 'static>(&self) -> Option<State<'_, T>> {
++        STATES.with_borrow(|s| s.get(&TypeId::of::<T>()).and_then(|v| v.downcast_ref::<T>()).map(State))
++    }
++    fn manage<T: Send + Sync + 'static>(&self, value: T) -> bool {
++        let v: &'static T = Box::leak(Box::new(value));
++        STATES.with_borrow_mut(|s| s.insert(TypeId::of::<T>(), v).is_none())
++    }
++    fn get_webview_window(&self, _label: &str) -> Option<WebviewWindow> {
++        Some(WebviewWindow)
++    }
++    fn path(&self) -> &PathResolver {
++        &PATHS
++    }
++}
++
++impl Manager for AppHandle {}
++
++impl AppHandle {
++    /// File > Exit: the page goes back to Playground.
++    pub fn exit(&self, code: i32) {
++        __private::host("exit", &serde_json::Value::from(code));
++    }
++    pub fn restart(&self) -> ! {
++        __private::host("restart", &serde_json::Value::Null);
++        std::process::exit(0)
++    }
++}
++
++pub trait Emitter {
++    fn emit<S: serde::Serialize + Clone>(&self, event: &str, payload: S) -> Result<()>;
++}
++
++impl Emitter for AppHandle {
++    fn emit<S: serde::Serialize + Clone>(&self, event: &str, payload: S) -> Result<()> {
++        let payload = serde_json::to_value(payload).map_err(|e| Error(e.to_string()))?;
++        __private::host(&format!("event:{event}"), &payload);
++        Ok(())
++    }
++}
++
++#[derive(Default)]
++pub struct Context;
++
++/// What a plug-in's `init()` gives; nothing here needs one.
++pub struct Plugin;
++
++type Setup = Box<dyn FnOnce(&mut App) -> std::result::Result<(), Box<dyn std::error::Error>>>;
++
++#[derive(Default)]
++pub struct Builder {
++    setups: Vec<Setup>,
++    handler: Option<__private::Handler>,
++}
++
++impl Builder {
++    pub fn manage<T: Send + Sync + 'static>(self, value: T) -> Self {
++        AppHandle.manage(value);
++        self
++    }
++    pub fn setup<F>(mut self, f: F) -> Self
++    where
++        F: FnOnce(&mut App) -> std::result::Result<(), Box<dyn std::error::Error>> + 'static,
++    {
++        self.setups.push(Box::new(f));
++        self
++    }
++    pub fn plugin<P>(self, _plugin: P) -> Self {
++        self
++    }
++    pub fn invoke_handler(mut self, handler: __private::Handler) -> Self {
++        self.handler = Some(handler);
++        self
++    }
++    /// Keeps the handler for the page's calls and runs the setup; returns at once.
++    pub fn run(self, _context: Context) -> Result<()> {
++        __private::HANDLER.set(self.handler);
++        for setup in self.setups {
++            setup(&mut AppHandle).map_err(|e| Error(e.to_string()))?;
++        }
++        Ok(())
++    }
++}
++
++pub mod ipc {
++    /// Raw bytes for the page (an `ArrayBuffer` there).
++    pub struct Response(Vec<u8>);
++
++    impl Response {
++        pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
++            Self(bytes.into())
++        }
++        pub fn into_bytes(self) -> Vec<u8> {
++            self.0
++        }
++    }
++}
++
++pub mod async_runtime {
++    use std::future::Future;
++    use std::pin::Pin;
++    use std::task::{Context, Poll};
++
++    /// Done already: the page has one thread, so blocking work runs as it is handed over.
++    pub struct JoinHandle<T>(Option<T>);
++
++    impl<T> Unpin for JoinHandle<T> {}
++
++    impl<T> Future for JoinHandle<T> {
++        type Output = crate::Result<T>;
++        fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
++            Poll::Ready(self.0.take().ok_or_else(|| crate::Error("polled twice".into())))
++        }
++    }
++
++    pub fn spawn_blocking<F: FnOnce() -> R, R>(f: F) -> JoinHandle<R> {
++        JoinHandle(Some(f()))
++    }
++
++    pub fn block_on<F: Future>(f: F) -> F::Output {
++        crate::__private::block_on(f)
++    }
++}
++
++#[doc(hidden)]
++pub mod __private {
++    use super::AppHandle;
++    use std::cell::RefCell;
++    use std::future::Future;
++    use std::task::{Context, Poll, Waker};
++
++    pub use serde_json::Value;
++
++    pub type Handler = fn(&str, &AppHandle, &Value) -> Option<Reply>;
++
++    thread_local! {
++        pub(crate) static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
++        static HOST: RefCell<Option<Box<dyn Fn(&str, &Value)>>> = RefCell::new(None);
++    }
++
++    pub enum Reply {
++        Json(Value),
++        Bytes(Vec<u8>),
++        Err(Value),
++    }
++
++    impl Reply {
++        pub fn json<T: serde::Serialize>(v: &T) -> Reply {
++            serde_json::to_value(v).map_or_else(|e| Reply::Err(e.to_string().into()), Reply::Json)
++        }
++        pub fn error<E: serde::Serialize>(e: E) -> Reply {
++            Reply::Err(serde_json::to_value(e).unwrap_or_else(|e| e.to_string().into()))
++        }
++    }
++
++    /// One argument, by its name in the call's object; a missing one reads as null (an `Option` is then `None`).
++    pub fn arg<T: serde::de::DeserializeOwned>(args: &Value, key: &str) -> Result<T, String> {
++        T::deserialize(args.get(key).unwrap_or(&Value::Null))
++            .map_err(|e| format!("invalid args `{key}` for command: {e}"))
++    }
++
++    /// Runs a command's future to its end: nothing in it waits for anything but blocking work, which is done
++    /// already ([`super::async_runtime::spawn_blocking`]).
++    pub fn block_on<F: Future>(f: F) -> F::Output {
++        let mut f = std::pin::pin!(f);
++        let mut cx = Context::from_waker(Waker::noop());
++        for _ in 0..1000 {
++            if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
++                return v;
++            }
++        }
++        panic!("a command waited for something that never came")
++    }
++
++    /// Calls a command; None when there is no such command.
++    pub fn invoke(cmd: &str, args: &Value) -> Option<Reply> {
++        let handler = HANDLER.with_borrow(|h| *h)?;
++        handler(cmd, &AppHandle, args)
++    }
++
++    /// Where events, titles, links and quitting go (the page).
++    pub fn set_host(f: impl Fn(&str, &Value) + 'static) {
++        HOST.set(Some(Box::new(f)));
++    }
++
++    pub fn host(what: &str, payload: &Value) {
++        HOST.with_borrow(|h| {
++            if let Some(h) = h {
++                h(what, payload)
++            }
++        });
++    }
++}
+diff --git a/apps/altered-web/vite.config.mjs b/apps/altered-web/vite.config.mjs
+new file mode 100644
+index 0000000..15117f5
+--- /dev/null
++++ b/apps/altered-web/vite.config.mjs
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground):
++// upstream's Vite config, with @tauri-apps/api's modules taken from js/ (the back end runs on the page).
++import { fileURLToPath } from 'node:url'
++import { mergeConfig } from 'vite'
++import upstream from '../../vite.config.ts'
++
++const here = (path) => fileURLToPath(new URL(path, import.meta.url))
++
++export default mergeConfig(upstream, {
++  root: here('../..'),
++  base: './',
++  resolve: {
++    alias: ['core', 'event', 'webview', 'window'].map((m) => ({ find: `@tauri-apps/api/${m}`, replacement: here(`js/tauri-${m}.js`) })),
++  },
++  build: { minify: true, sourcemap: false },
++})
+diff --git a/scripts/build-web.sh b/scripts/build-web.sh
+new file mode 100755
+index 0000000..f5de9f3
+--- /dev/null
++++ b/scripts/build-web.sh
+@@ -0,0 +1,49 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: GPL-3.0-or-later
++# Playground's browser build of Altered Audio Editor (patches/audition.yaml in github.com/daijro/openplayground), into
++# the folder given ($1): the back end (src-tauri, with Tauri's stand-ins in apps/altered-web) as a wasm32-wasip1
++# module, altered.wasm, and the interface built by Vite with apps/altered-web/vite.config.mjs.
++#
++# The project's name and logo are its authors' trademarks (TRADEMARKS.md): this build is renamed to $NAME in every
++# string the app shows, except where it names the original project (its book, its donation link, "Based on").
++set -euo pipefail
++DIST=$(realpath -m "$1")
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++NAME=${PLAYGROUND_NAME:-Retake}
++TARGET=${CARGO_TARGET_DIR:-$ROOT/apps/altered-web/target}
++mkdir -p "$TARGET"
++
++# LAME (MP3 export) is C: wasi-sdk compiles it for WASI.
++WASI_SDK_VERSION=34
++SDK=$TARGET/wasi-sdk-$WASI_SDK_VERSION
++if [ ! -x "$SDK/bin/clang" ]; then
++  mkdir -p "$SDK"
++  curl -sSfL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$WASI_SDK_VERSION/wasi-sdk-$WASI_SDK_VERSION.0-x86_64-linux.tar.gz" |
++    tar -xz -C "$SDK" --strip-components=1
++fi
++rustup target add wasm32-wasip1 >/dev/null 2>&1 || true
++
++cd "$ROOT"
++if [ "$NAME" != "Altered Audio Editor" ]; then
++  grep -rlE 'Altered Audio' src src-tauri/src index.html --include=*.ts --include=*.svelte --include=*.rs --include=*.html |
++    xargs -r sed -i -E "/Podcasting Demystified|Support Altered Audio Editor|Based on Altered Audio Editor/!{s/Altered Audio Editor/$NAME/g; s/Altered Audio/$NAME/g}"
++fi
++
++cd apps/altered-web
++# Upstream's lock pins the back end's crates; the stand-ins take the place of what they replace.
++cp ../../src-tauri/Cargo.lock .
++stand_ins=()
++for spec in tauri@2 tauri-build@2 tauri-plugin-dialog@2 tauri-plugin-opener@2 tauri-plugin-updater@2 libloading@0.8; do
++  v=$(awk -v n="${spec%@*}" '$0 == "name = \"" n "\"" { getline; gsub(/version = |"/, ""); print }' Cargo.lock | grep "^${spec#*@}\." | head -1)
++  [ -z "$v" ] || stand_ins+=(-p "${spec%@*}@$v")
++done
++[ ${#stand_ins[@]} -eq 0 ] || cargo update "${stand_ins[@]}"
++CC_wasm32_wasip1="$SDK/bin/clang" AR_wasm32_wasip1="$SDK/bin/llvm-ar" \
++  CFLAGS_wasm32_wasip1="--sysroot=$SDK/share/wasi-sysroot -D_WASI_EMULATED_SIGNAL -O3" \
++  MP3LAME_SYS_OVERRIDE_HOST=wasm32-wasi \
++  cargo build --release --target wasm32-wasip1
++
++cd "$ROOT"
++npm ci --no-audit --no-fund
++npx vite build --config apps/altered-web/vite.config.mjs --outDir "$DIST" --emptyOutDir
++cp "$TARGET/wasm32-wasip1/release/altered_web.wasm" "$DIST/altered.wasm"
+diff --git a/src-tauri/src/engine/preview/web.rs b/src-tauri/src/engine/preview/web.rs
+new file mode 100644
+index 0000000..6c165f7
+--- /dev/null
++++ b/src-tauri/src/engine/preview/web.rs
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! File preview in Playground's browser build (patches/audition.yaml in github.com/daijro/openplayground): `run` as
++//! on the desktop without its threads. The page's audio callback (altered_playground::play) does the decode
++//! thread's work, decoding until the ring is full, then the device's (`fill`). Stereo at the page's rate.
++use std::sync::atomic::Ordering;
++use std::sync::{mpsc, Arc};
++
++use rtrb::RingBuffer;
++
++use super::{file_fill, fill, Fill, Input, Shared, BUFFER_SECONDS};
++
++pub(super) fn run(input: Input, shared: Arc<Shared>, ready: mpsc::Sender<Result<u32, String>>) {
++    let rate = altered_playground::RATE;
++    let channels = altered_playground::CHANNELS;
++    let source: Result<Fill, String> = match input {
++        Input::File(path, start) => file_fill(&path, start, channels, rate),
++        Input::Made(make) => make(channels, rate),
++    };
++    let mut source = match source {
++        Ok(s) => s,
++        Err(e) => {
++            let _ = ready.send(Err(e));
++            return;
++        }
++    };
++    let capacity = ((f64::from(rate) * BUFFER_SECONDS) as usize).max(4096) * channels;
++    let (mut producer, mut consumer) = RingBuffer::<f32>::new(capacity);
++    let mut block: Vec<f32> = Vec::with_capacity(8192);
++    let mut at = 0;
++    altered_playground::play(move |out: &mut [f32]| {
++        if shared.stop.load(Ordering::SeqCst) || shared.finished.load(Ordering::SeqCst) {
++            return false;
++        }
++        // The decode thread's turn: whole blocks while they fit.
++        while !shared.decoded_all.load(Ordering::SeqCst) {
++            if at == block.len() {
++                block.clear();
++                at = 0;
++                if !source(&mut block) {
++                    shared.decoded_all.store(true, Ordering::SeqCst);
++                    break;
++                }
++            }
++            let (_, left) = producer.push_partial_slice(&block[at..]);
++            at = block.len() - left.len();
++            if at < block.len() {
++                break;
++            }
++        }
++        fill(out, &mut consumer, &shared, channels);
++        true
++    });
++    let _ = ready.send(Ok(rate));
++}
+diff --git a/src-tauri/src/engine/record/web.rs b/src-tauri/src/engine/record/web.rs
+new file mode 100644
+index 0000000..6efc924
+--- /dev/null
++++ b/src-tauri/src/engine/record/web.rs
+@@ -0,0 +1,108 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Recording in Playground's browser build (patches/audition.yaml in github.com/daijro/openplayground): `run` as on
++//! the desktop without its thread. The page's microphone is the one input (stereo at the page's rate); each block
++//! it hands over (altered_playground::record) goes through what the desktop's disk thread does: the takes' files, the
++//! meters and live waveforms, and input monitoring. Takes are finished when recording stops ([`finish`]).
++use std::cell::RefCell;
++use std::path::PathBuf;
++use std::sync::atomic::Ordering;
++use std::sync::{mpsc, Arc};
++
++use rtrb::RingBuffer;
++
++use super::{LiveTap, MonitorMix, RecordTarget, Shared, Take, TakeWriter, MONITOR_MAX_QUEUE};
++
++thread_local! {
++    /// The takes being written, finished by [`finish`].
++    static WRITERS: RefCell<Vec<std::rc::Rc<RefCell<Option<TakeWriter>>>>> = RefCell::default();
++}
++
++pub(super) fn run(
++    _device: Option<String>,
++    targets: Vec<(RecordTarget, Vec<usize>)>,
++    dir: Option<PathBuf>,
++    shared: Arc<Shared>,
++    first: bool,
++    ready: mpsc::Sender<Result<(), String>>,
++) -> Result<Vec<Take>, String> {
++    let rate = altered_playground::RATE;
++    let channels = altered_playground::CHANNELS;
++    let writer = match dir {
++        Some(d) => match TakeWriter::create(&d, &targets, rate, channels) {
++            Ok(w) => Some(w),
++            Err(e) => {
++                let e = format!("Could not create the recording file: {e}");
++                let _ = ready.send(Err(e.clone()));
++                return Err(e);
++            }
++        },
++        None => None,
++    };
++    let writer = std::rc::Rc::new(RefCell::new(writer));
++    WRITERS.with_borrow_mut(|w| w.push(writer.clone()));
++    if first {
++        shared.rate.store(rate, Ordering::Relaxed);
++    }
++    let mut tap = LiveTap::new(&targets, channels);
++
++    // Input monitoring: the monitored targets' mix through the page's audio.
++    let mix = MonitorMix::new(&targets, channels);
++    let mut monitor = mix.as_ref().map(|_| {
++        let (p, mut c) = RingBuffer::<f32>::new(rate as usize * 2);
++        let s = shared.clone();
++        altered_playground::play(move |out: &mut [f32]| {
++            for v in out.iter_mut() {
++                *v = c.pop().unwrap_or(0.0);
++            }
++            !s.stop.load(Ordering::SeqCst)
++        });
++        p
++    });
++    let max_queue = (MONITOR_MAX_QUEUE * f64::from(rate)) as usize * 2;
++    let mut mixed: Vec<f32> = Vec::new();
++
++    altered_playground::record(move |block: &[f32]| {
++        if shared.stop.load(Ordering::SeqCst) {
++            return false;
++        }
++        let peak = block.iter().fold(0f32, |m, v| m.max(v.abs()));
++        shared.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
++        if let Some(w) = writer.borrow_mut().as_mut() {
++            if w.push(block).is_err() {
++                shared.overruns.fetch_add(1, Ordering::Relaxed);
++            }
++            if first {
++                shared.frames.fetch_add((block.len() / channels) as u64, Ordering::Relaxed);
++            }
++        }
++        if let Ok(mut live) = shared.live.lock() {
++            tap.push(block, &mut live);
++        }
++        if let (Some(m), Some(p)) = (mix.as_ref(), monitor.as_mut()) {
++            mixed.clear();
++            m.mix(block, &mut mixed);
++            let queued = p.buffer().capacity() - p.slots();
++            if queued + mixed.len() <= max_queue.max(mixed.len()) {
++                for &v in &mixed {
++                    if p.push(v).is_err() {
++                        break;
++                    }
++                }
++            }
++        }
++        true
++    });
++    let _ = ready.send(Ok(()));
++    Ok(Vec::new())
++}
++
++/// Finishes the takes of the recording just stopped (the desktop's threads give them back when joined).
++pub(super) fn finish(takes: &mut Vec<Take>, first_err: &mut Option<String>) {
++    for w in WRITERS.take() {
++        match w.borrow_mut().take().map(TakeWriter::finish) {
++            Some(Ok(t)) => takes.extend(t),
++            Some(Err(e)) => *first_err = first_err.take().or(Some(e)),
++            None => {}
++        }
++    }
++}
+diff --git a/src-tauri/src/engine/transport/web.rs b/src-tauri/src/engine/transport/web.rs
+new file mode 100644
+index 0000000..6aff7eb
+--- /dev/null
++++ b/src-tauri/src/engine/transport/web.rs
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! Multitrack playback in Playground's browser build (patches/audition.yaml in github.com/daijro/openplayground):
++//! `run` as on the desktop without its threads. It sets up the mix as the desktop's does and returns; the page's
++//! audio callback (altered_playground::play) does the render thread's work, rendering until the rings are full,
++//! then the device's, mixing from them (`mix`). Stereo at the page's rate; a 3D Space session plays its stereo mix.
++use std::sync::atomic::Ordering;
++use std::sync::{mpsc, Arc};
++
++use rtrb::RingBuffer;
++
++use super::{has_room, mix, render_block, Jump, Routing, Shared, Ticker, AHEAD_SECONDS, BLOCK};
++use crate::engine::graph::{Graph, Mix};
++use crate::engine::metronome::Click;
++use crate::engine::plan;
++use crate::engine::render::Renderer;
++use crate::session::model::Session;
++
++pub(super) fn run(
++    mut session: Session,
++    from: u64,
++    jump: Option<Jump>,
++    shared: Arc<Shared>,
++    ready: mpsc::Sender<Result<u32, String>>,
++) {
++    let out_rate = altered_playground::RATE;
++    let channels = altered_playground::CHANNELS;
++    crate::engine::scope::set_rate(out_rate);
++    if session.tracks.is_empty() {
++        // Keep the clock running with one silent track.
++        session.tracks.push(crate::session::model::Track::new(
++            "",
++            crate::session::model::ChannelLayout::Stereo,
++        ));
++    }
++    let routed = crate::session::routing::is_routed(&session);
++    let start_frame = plan::to_out(from, session.sample_rate, out_rate);
++    let mut renderer = Renderer::new(plan::build(&session, out_rate), start_frame);
++    if let Some((at, to)) = jump.and_then(|j| j.points(from)) {
++        let r = session.sample_rate;
++        renderer = renderer.with_jump(plan::to_out(at, r, out_rate), plan::to_out(to, r, out_rate));
++    }
++    let mut mix_ = Mix::new(renderer, Graph::new(&session, out_rate, routed));
++    let rings = mix_.outputs();
++    let r = session.sample_rate;
++    let mut click = Ticker {
++        click: Click::new(&session.tempo, out_rate),
++        start: start_frame,
++        jump: jump.map(|j| match j {
++            Jump::Loop { start, end } => Jump::Loop { start: plan::to_out(start, r, out_rate), end: plan::to_out(end, r, out_rate) },
++            Jump::Skip { start, end } => Jump::Skip { start: plan::to_out(start, r, out_rate), end: plan::to_out(end, r, out_rate) },
++        }),
++        buf: Vec::with_capacity(BLOCK * 2),
++    };
++
++    let cap = ((f64::from(out_rate) * AHEAD_SECONDS) as usize).max(BLOCK * 2) * 2;
++    let (mut producers, mut consumers): (Vec<_>, Vec<_>) = (0..rings).map(|_| RingBuffer::<f32>::new(cap)).unzip();
++    let (mut click_out, mut click_in) = RingBuffer::<f32>::new(cap);
++    let mut routing = Routing { stereo: [0, 1], bed: None, frame: Vec::new() };
++    let mut blocks: Vec<Vec<f32>> = vec![Vec::with_capacity(BLOCK * 2); rings];
++    let mut gains = vec![[0f32; 2]; rings];
++    let mut peaks = vec![[0f32; 2]; rings];
++
++    altered_playground::play(move |out: &mut [f32]| {
++        if shared.stop.load(Ordering::SeqCst) {
++            return false;
++        }
++        if let Some(update) = shared.take_chains() {
++            mix_.set_chains(&update);
++        }
++        if let Some(levels) = shared.take_levels() {
++            mix_.graph().set_levels(levels);
++        }
++        while has_room(&producers, &click_out, None, 0) {
++            render_block(&mut mix_, &mut blocks, &mut producers, &mut click, &mut click_out, None);
++            shared.push_meters(&mut mix_);
++        }
++        mix(out, channels, &mut consumers, &mut click_in, &shared, &mut gains, &mut peaks, &mut routing);
++        true
++    });
++    let _ = ready.send(Ok(out_rate));
++}
