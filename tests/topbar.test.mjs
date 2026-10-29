@@ -300,14 +300,21 @@ test('Source offers the app as a standalone page: a ZIP that runs on its own, wa
   execFileSync('gzip', ['-t', join(root, wasm)])
   assert.match(readFileSync(join(root, 'NOTICE.txt'), 'utf8'), /Copyright \(c\) 2026 soulspin/)
   const readme = readFileSync(join(root, 'README.txt'), 'utf8')
-  for (const part of ['WINDOWS', 'macOS', 'LINUX', 'ANDROID', 'iOS (iPhone) and iPadOS', 'Recommended: double-click run.bat', 'sh run.sh', 'Termux', 'a-Shell']) assert.ok(readme.includes(part), part)
+  // Works-on line first, then the systems in order: iOS and iPadOS, Android, ChromeOS, Windows, macOS, Linux.
+  assert.match(readme.split('\n').slice(0, 6).join('\n'), /WORKS ON: iPhone and iPad \(iOS, iPadOS\), Android, ChromeOS, Windows, macOS and Linux/)
+  const at = ['iPHONE and iPAD (iOS and iPadOS)', '\nANDROID\n', 'CHROMEOS (', '\nWINDOWS\n', '\nmacOS\n', '\nLINUX\n'].map((h) => readme.indexOf(h))
+  assert.ok(at.every((i) => i > 0) && at.every((i, n) => !n || i > at[n - 1]), `sections in order: ${at}`)
+  for (const part of ['a-Shell', 'Termux', 'Method 1, recommended: the Linux terminal', 'Method 2: a web-server extension', 'Method 3: Android apps', 'Recommended: double-click run.bat', 'sh run.sh']) assert.ok(readme.includes(part), part)
+  assert.ok(!/Playground/.test(readme), 'the guide never sends people to the Playground site')
   assert.ok(!/\$\{/.test(readme), 'no template left in the README')
   await page.context().close()
 
   // Opened from the disk it says what to run, rather than failing on the browser's file:// rules.
   const disk = await browser.newPage()
   await disk.goto(`file://${root}/index.html`)
-  assert.match(await disk.locator('body').innerText(), /needs a local server[\s\S]*run\.sh/)
+  const notice = await disk.locator('body').innerText()
+  for (const part of ['iPhone and iPad', 'iOS', 'iPadOS', 'Android', 'ChromeOS', 'Windows', 'macOS', 'Linux', 'a-Shell', 'Termux', 'run.bat', 'sh run.sh']) assert.ok(notice.includes(part), `the page names ${part}`)
+  assert.ok(notice.indexOf('iPhone') < notice.indexOf('Android') && notice.indexOf('Android') < notice.indexOf('ChromeOS') && notice.indexOf('ChromeOS') < notice.indexOf('Windows'))
   await disk.close()
   assert.ok(statSync(join(root, 'run.sh')).mode & 0o111, 'run.sh is executable')
 

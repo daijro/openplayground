@@ -74,7 +74,7 @@ const FILES = (name) => `<script id="playground-standalone">{
   // Opened from the disk, a page can't fetch its own files (the browser treats every file:// page as a separate
   // origin): say what to run instead of failing with errors.
   if (location.protocol === 'file:') {
-    addEventListener('DOMContentLoaded', () => { document.documentElement.innerHTML = ${JSON.stringify(`<head><meta charset="utf-8"><title>${name}</title></head><body style="font:16px/1.5 system-ui,sans-serif;max-width:34em;margin:12vh auto;padding:0 1em"><h1>${name} needs a local server</h1><p>Browsers don't let a page opened from the disk load its own files, so this folder has to be served. Run <b>run.sh</b> (macOS, Linux; or <code>python3 serve.py</code>) or <b>run.bat</b> (Windows) in this folder, then open <b>http://localhost:8000/</b> if it doesn't open by itself.</p><p>It needs Python 3 (python.org). README.txt has the details.</p></body>`).replace(/</g, '\\u003c')} })
+    addEventListener('DOMContentLoaded', () => { document.documentElement.innerHTML = ${JSON.stringify(`<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title></head><body style="font:16px/1.5 system-ui,sans-serif;max-width:36em;margin:6vh auto;padding:0 1em"><h1>${name} needs one more step</h1><p>This works on <b>iPhone, iPad, Android, ChromeOS, Windows, macOS and Linux</b>. Browsers don't let a page opened straight from the disk load its own files, so this folder has to be served by a small program on your device. It takes a few minutes the first time.</p><ul><li><b>iPhone and iPad</b> (iOS, iPadOS): install the free <b>a-Shell</b> app, open this folder in it and run <code>python3 serve.py</code></li><li><b>Android</b>: install <b>Termux</b> (from F-Droid) and run <code>python serve.py</code> in this folder</li><li><b>ChromeOS</b>: in the Linux terminal run <code>sh run.sh</code>, or use a web-server extension or Termux</li><li><b>Windows</b>: double-click <b>run.bat</b></li><li><b>macOS and Linux</b>: in a terminal in this folder run <code>sh run.sh</code></li></ul><p>Then open <b>http://localhost:8000/</b> if it doesn't open by itself. <b>README.txt</b> in this folder has every step, system by system.</p></body>`).replace(/</g, '\\u003c')} })
   }
   const memory = new Map()
   const save = (name, bytes) => {
@@ -130,18 +130,111 @@ export function notice(app, build) {
 const README = (name, isolated) => `${name}, standalone
 ${'='.repeat(name.length + 12)}
 
+WORKS ON: iPhone and iPad (iOS, iPadOS), Android, ChromeOS, Windows, macOS and Linux.
+Find your system below. The first time takes a few minutes; after that it is one step.
+
 This folder is the whole app: a page that unzips the .wasm.gz files itself, and the files it loads.
 
-Browsers don't let a page opened from the disk (a file:// address) load its own files, so double-clicking
-index.html shows an error. The folder has to be served by a small web server on your own computer. The scripts here
-do that for you, and open the app in your browser by themselves. Nothing leaves your machine: the server only listens
-on this computer (127.0.0.1).
+Browsers don't let a page opened straight from the disk (a file:// address) load its own files, so double-clicking
+index.html shows a message, not the app. The folder has to be served by a small program on your own device. Nothing
+leaves your device: the server only listens on this device (127.0.0.1).
 
-You need two things:
-  1. Python 3, to run the server (steps per system below).
+Every system needs two things:
+  1. Python 3, to run the server (each section says how to get it).
   2. A recent browser: Chrome or Edge (recommended), Firefox or Safari.
 
-First, extract the ZIP completely. Run the scripts from the extracted folder, not from inside the ZIP viewer.
+First, extract the ZIP completely. Run everything from the extracted folder, not from inside a ZIP viewer.
+The server prints  Serving http://localhost:8000/  and opens your browser when it can. If the browser doesn't open,
+open http://localhost:8000/ yourself. Keep the server running while you use the app, and stop it with Ctrl+C.
+
+Sections, in order: iPhone and iPad, Android, ChromeOS, Windows, macOS, Linux.
+
+--------------------------------------------------------------------------------------------------------------
+iPHONE and iPAD (iOS and iPadOS)
+--------------------------------------------------------------------------------------------------------------
+iOS and iPadOS can't run run.sh or run.bat, and they pause apps that run in the background, so this takes a little
+care. You need the free a-Shell app (a terminal with Python) from the App Store:
+
+  1. Install a-Shell from the App Store (https://apps.apple.com/app/a-shell/id1473805438).
+  2. In the Files app, tap this ZIP to extract it (or extract it in the app you downloaded it with).
+  3. Open a-Shell. Run   pickFolder   and choose the extracted folder (the one that holds serve.py and
+     index.html). a-Shell asks to access it once; allow it, then it moves you into that folder.
+  4. Run   python3 serve.py   and wait for  Serving http://localhost:8000/
+  5. Open  http://localhost:8000/  in Safari:
+       - iPad: put Safari next to a-Shell in Split View or Slide Over (swipe up from the bottom edge, drag Safari
+         beside it). Keep a-Shell visible while you use the app: iPadOS pauses it when it is hidden.
+       - iPhone: iOS pauses a-Shell as soon as you leave it, which stops the server. Use the iPhone's
+         Picture in Picture or a floating window if your a-Shell version offers one; otherwise this may not work on
+         an iPhone.
+  6. To stop, go back to a-Shell and press Ctrl+C (the Ctrl key on the keyboard bar, then C).
+
+These steps have not been tested on an iPhone or iPad. iOS also limits how much memory a page may use, so big
+apps may not load, and some need a recent iOS or iPadOS version (16 or newer is safest).
+
+--------------------------------------------------------------------------------------------------------------
+ANDROID
+--------------------------------------------------------------------------------------------------------------
+Nothing on Android runs run.sh or run.bat by itself. You need Termux, a free terminal app with Python:
+
+  1. Install Termux from F-Droid (https://f-droid.org/packages/com.termux/). F-Droid's is the version its
+     developers keep up to date; the Play Store one may be older and behave differently.
+  2. Extract this ZIP with your Files app (tap the ZIP, then Extract). Note where the folder ends up, for example
+     Downloads.
+  3. Open Termux and give it access to your files (a prompt appears; allow it):
+         termux-setup-storage
+  4. Install Python once:
+         pkg install python
+  5. Go to the extracted folder (the one that holds serve.py and index.html: use ls to look around; this
+     example assumes it is somewhere in Downloads) and start the server:
+         cd ~/storage/downloads
+         ls
+         cd the-folder-that-holds-serve.py
+         python serve.py
+  6. Open Chrome and go to  http://localhost:8000/   (Termux can't open the browser for you).
+     Leave Termux running in the background. If Android stops it to save battery and the app stops responding,
+     allow Termux to run unrestricted in Settings, Apps, Termux, Battery.
+  7. To stop, go back to Termux and press Ctrl+C (the CTRL key above the keyboard, then C).
+
+These steps have not been tested on a device. A phone has far less memory than a computer: big apps may run out of
+it and Chrome may close the tab. Chrome or another recent Chromium browser works best.
+
+--------------------------------------------------------------------------------------------------------------
+CHROMEOS (Chromebook, Chromebox, Chromebase)
+--------------------------------------------------------------------------------------------------------------
+What works depends on how your Chromebook is set up. Use the first method that your device allows.
+
+Method 1, recommended: the Linux terminal
+  Needs a Chromebook that supports Linux (most made since 2019) and isn't blocked by a school or company.
+  1. Turn Linux on, once: Settings, About ChromeOS (or Advanced), Developers, Linux development environment,
+     Turn on, then follow the steps (a few minutes, a few GB of space). Skip this if the Terminal app is already
+     in your app list.
+  2. Extract the ZIP in the Files app (right-click it, Extract all), then drag the extracted folder into
+     "Linux files" in the Files app's left column.
+  3. Open the Terminal app. Run:
+         cd the-folder-that-holds-serve.py
+         sh run.sh
+  4. If it says python3 isn't found, run  sudo apt install python3  (answer y), then  sh run.sh  again.
+  5. Open Chrome and go to  http://localhost:8000/  if it didn't open by itself. ChromeOS passes localhost from
+     Linux to Chrome by itself. Stop with Ctrl+C in Terminal.
+
+Method 2: a web-server extension (no Linux needed)
+  For a Chromebook where Linux is blocked but you can install from the Chrome Web Store.
+  ${isolated ? `This app needs special server headers (see the end of this guide) that these extensions don't send, so
+  this method does NOT work for ${name}: use method 1 or 3.` : `1. Extract the ZIP in the Files app (right-click it, Extract all).
+  2. In the Chrome Web Store, search for "Web Server for Chrome" (by 200 OK) and add it. Google has been phasing
+     out Chrome apps like this one, so if the store doesn't offer it, or it won't start, use method 1 or 3.
+  3. Open it, choose Choose folder, and pick the extracted folder (the one that holds index.html).
+  4. Turn on "Web Server: STARTED", then click the address it shows (usually http://127.0.0.1:8887).
+  5. To stop, turn the switch off. Keep its window open while you use the app.`}
+
+Method 3: Android apps (Chromebooks with Google Play)
+  Install Termux and follow the ANDROID section above (steps 1 to 7; Play Store installs of Termux may be old, so
+  if F-Droid's APK won't install, install the F-Droid app first). Then open  http://localhost:8000/  in an
+  ANDROID browser (install Chrome or Firefox from Google Play): the ChromeOS browser may not reach an Android
+  app's server.
+
+These methods have not been tested on a Chromebook. If you aren't sure which setup you have: if the Terminal app
+is in your app list or Settings has a Linux entry, use method 1; if you only have Google Play, use method 3.
 
 --------------------------------------------------------------------------------------------------------------
 WINDOWS
@@ -185,7 +278,7 @@ Double-clicking run.sh doesn't start it (macOS opens it in a text editor): use T
 Manual way: in Terminal, in this folder, run   python3 serve.py   then open http://localhost:8000/
 
 --------------------------------------------------------------------------------------------------------------
-LINUX (and ChromeOS with Linux turned on)
+LINUX
 --------------------------------------------------------------------------------------------------------------
 Recommended: open a terminal in this folder and run
 
@@ -199,59 +292,9 @@ Python 3 is already installed on most distributions. If run.sh says python3 isn'
   - Fedora:                 sudo dnf install python3
   - Arch, Manjaro:          sudo pacman -S python
   - openSUSE:               sudo zypper install python3
-If no browser opens (no desktop, or ChromeOS Linux), open http://localhost:8000/ in your browser by hand.
+If no browser opens (no desktop), open http://localhost:8000/ in your browser by hand.
 
 Manual way: python3 serve.py   then open http://localhost:8000/
-
---------------------------------------------------------------------------------------------------------------
-ANDROID
---------------------------------------------------------------------------------------------------------------
-Nothing on a phone runs run.sh or run.bat by itself, and the easiest way to use ${name} on Android is the
-Playground site in Chrome, which needs none of this. To run this copy anyway, you need an app that can run Python:
-Termux (a terminal for Android).
-
-  1. Install Termux from F-Droid (https://f-droid.org/packages/com.termux/). F-Droid's is the version its
-     developers keep up to date; the Play Store one may be older and behave differently.
-  2. Extract this ZIP with your Files app (tap the ZIP, then Extract). Note where the folder ends up, for example
-     Downloads.
-  3. Open Termux and give it access to your files (a prompt appears; allow it):
-         termux-setup-storage
-  4. Install Python once:
-         pkg install python
-  5. Go to the extracted folder (the one that holds serve.py and index.html: use ls to look around; this
-     example assumes it is somewhere in Downloads) and start the server:
-         cd ~/storage/downloads
-         ls
-         cd the-folder-that-holds-serve.py
-         python serve.py
-  6. Open Chrome and go to  http://localhost:8000/   (Termux can't open the browser for you).
-     Leave Termux running, in the background (Android may stop it to save battery: allow it to run unrestricted
-     in Settings if the app stops responding). To stop, go back to Termux and press Ctrl+C (the CTRL key above
-     the keyboard, then C).
-
-Not tested on a device. A phone has far less memory than a computer: big apps may run out of it and Chrome may
-close the tab. Chrome or another recent Chromium browser works best.
-
---------------------------------------------------------------------------------------------------------------
-iOS (iPhone) and iPadOS (iPad)
---------------------------------------------------------------------------------------------------------------
-iOS and iPadOS can't run run.sh or run.bat, don't let a page in Safari read a folder, and stop apps that run in
-the background. The easiest way to use ${name} on an iPhone or iPad is the Playground site in Safari (Share, then
-Add to Home Screen), which needs none of this.
-
-To run this copy anyway, you need an app that can run a local web server. a-Shell (free, on the App Store) is a
-terminal with Python on iOS and iPadOS:
-
-  1. Install a-Shell from the App Store, and extract this ZIP in the Files app (tap the ZIP).
-  2. Open a-Shell. To reach the folder, run   pickFolder   and choose the extracted folder in the list that opens
-     (a-Shell remembers it afterwards; see its help for how to cd to it).
-  3. In the folder, run   python3 serve.py
-  4. On an iPad: put Safari beside a-Shell in Split View or Slide Over, and open  http://localhost:8000/
-     On an iPhone: switching to Safari pauses a-Shell, which stops the server; this may not work there at all.
-  5. To stop, go back to a-Shell and press Ctrl+C.
-
-Not tested on a device. iOS also limits how much memory a page may use, so big apps may not load, and some need
-features older iOS and Safari versions lack.
 
 --------------------------------------------------------------------------------------------------------------
 ANY SYSTEM, WITHOUT THE SCRIPTS
@@ -265,7 +308,7 @@ don't, and the app won't start without them):
 ` : 'Nothing special is needed from the server.'}
 To use another port (if 8000 is taken):   sh run.sh 9000   or   run.bat 9000   or   python3 serve.py 9000
 
-Open and Save use the browser's own file picker and downloads. What the app saves stays on your computer, in your
+Open and Save use the browser's own file picker and downloads. What the app saves stays on your device, in your
 Downloads folder, nowhere else.
 
 See NOTICE.txt for the licence.
@@ -282,7 +325,10 @@ port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 with http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler) as server:
     url = f'http://localhost:{port}/'
     print(f'Serving {url} (Ctrl+C to stop)')
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:
