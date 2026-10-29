@@ -44,7 +44,7 @@
 
 # decode_input is files.rs's private decoder (Open's); playground.rs reads handed-in files with it.
 - file: apps/paintcraft-web/src/paintcraft-web/files.rs
-  find: '^fn\s+decode_input\b'
+  find: '^(?:#\[cfg\(test\)\]\s*)?(?:pub\(crate\)\s+)?fn\s+decode_input\b'
   replace: 'pub(crate) fn decode_input'
 
 # Rule 6/6: the Classic ribbon's "Download for desktop" opens /download, upstream's site page, which this build doesn't
