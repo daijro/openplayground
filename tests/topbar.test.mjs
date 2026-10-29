@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { createReadStream, existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -302,19 +302,23 @@ test('Source offers the app as a standalone page: a ZIP that runs on its own, wa
   assert.ok(existsSync(join(root, 'README.txt')))
   await page.context().close()
 
-  // Served by any static server, it starts the app: unzips the wasm, no top bar, and `playgroundFiles` is its own.
-  const server = createServer((req, res) => {
-    const file = join(root, decodeURIComponent(req.url.split('?')[0]).replace(/\/$/, '/index.html'))
-    if (!file.startsWith(root) || !statSync(file, { throwIfNoEntry: false })?.isFile()) return res.writeHead(404).end()
-    res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream' })
-    createReadStream(file).pipe(res)
-  }).listen(0)
-  t.after(() => server.close())
+  // Opened from the disk it says what to run, rather than failing on the browser's file:// rules.
+  const disk = await browser.newPage()
+  await disk.goto(`file://${root}/index.html`)
+  assert.match(await disk.locator('body').innerText(), /needs a local server[\s\S]*run\.sh/)
+  await disk.close()
+  assert.ok(statSync(join(root, 'run.sh')).mode & 0o111, 'run.sh is executable')
+
+  // Served by its own serve.py, it starts the app: unzips the wasm, no top bar, and `playgroundFiles` is its own.
+  const port = await new Promise((resolve) => { const probe = createServer().listen(0, () => { const { port } = probe.address(); probe.close(() => resolve(port)) }) })
+  const server = spawn('python3', ['serve.py', String(port)], { cwd: root, env: { ...process.env, BROWSER: 'true' }, stdio: 'ignore' })
+  t.after(() => server.kill())
+  await until(() => fetch(`http://localhost:${port}/`).then((r) => r.ok, () => false), 10000, 'serve.py')
   const standalone = await browser.newPage()
   const errors = []
   standalone.on('pageerror', (e) => errors.push(e.message))
   const wasmResponse = standalone.waitForResponse((r) => r.url().endsWith('.wasm.gz'))
-  await standalone.goto(`http://localhost:${server.address().port}/`)
+  await standalone.goto(`http://localhost:${port}/`)
   assert.equal((await wasmResponse).status(), 200)
   await standalone.locator('canvas').first().waitFor({ timeout: 30000 })
   assert.equal(await standalone.locator('.pg-bar').count(), 0)

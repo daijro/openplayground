@@ -25,7 +25,7 @@ async function zip(entries) {
   const parts = []
   const central = []
   let offset = 0
-  for (const { name, blob } of entries) {
+  for (const { name, blob, mode = 0o644 } of entries) {
     const n = encoder.encode(name)
     const crc = crc32(new Uint8Array(await blob.arrayBuffer()))
     const local = new DataView(new ArrayBuffer(30))
@@ -42,7 +42,7 @@ async function zip(entries) {
     parts.push(local, n, blob)
     const dir = new DataView(new ArrayBuffer(46))
     dir.setUint32(0, 0x02014b50, true)
-    dir.setUint16(4, 20, true)
+    dir.setUint16(4, (3 << 8) | 20, true) // made on Unix: external attributes hold the file mode
     dir.setUint16(6, 20, true)
     dir.setUint16(8, 0x0800, true)
     dir.setUint16(12, time, true)
@@ -51,6 +51,7 @@ async function zip(entries) {
     dir.setUint32(20, blob.size, true)
     dir.setUint32(24, blob.size, true)
     dir.setUint16(28, n.length, true)
+    dir.setUint32(38, ((0o100000 | mode) << 16) >>> 0, true)
     dir.setUint32(42, offset, true)
     central.push(dir, n)
     offset += 30 + n.length + blob.size
@@ -69,7 +70,12 @@ async function zip(entries) {
 
 // Stands in for shell/files.js: no browser storage or explorer, the browser's own picker and downloads. What an app
 // writes stays in memory until the page is closed. (`browser:/…` paths are the shell's; the app only passes them back.)
-const FILES = `<script id="playground-standalone">{
+const FILES = (name) => `<script id="playground-standalone">{
+  // Opened from the disk, a page can't fetch its own files (the browser treats every file:// page as a separate
+  // origin): say what to run instead of failing with errors.
+  if (location.protocol === 'file:') {
+    addEventListener('DOMContentLoaded', () => { document.documentElement.innerHTML = ${JSON.stringify(`<head><meta charset="utf-8"><title>${name}</title></head><body style="font:16px/1.5 system-ui,sans-serif;max-width:34em;margin:12vh auto;padding:0 1em"><h1>${name} needs a local server</h1><p>Browsers don't let a page opened from the disk load its own files, so this folder has to be served. Run <b>run.sh</b> (macOS, Linux; or <code>python3 serve.py</code>) or <b>run.bat</b> (Windows) in this folder, then open <b>http://localhost:8000/</b> if it doesn't open by itself.</p><p>It needs Python 3 (python.org). README.txt has the details.</p></body>`).replace(/</g, '\\u003c')} })
+  }
   const memory = new Map()
   const save = (name, bytes) => {
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([bytes])), download: name.split('/').pop() })
@@ -97,11 +103,11 @@ const FILES = `<script id="playground-standalone">{
 }</script>`
 
 // The installed page with the shell's tags out, and the Files stand-in ahead of everything else in <head>.
-export const standalonePage = (html) =>
+export const standalonePage = (html, name) =>
   html
     .replace(/\s*<link rel="stylesheet" href="\/shell\/shell\.css">/g, '')
     .replace(/\s*<script type="module" src="\/shell\/app\.js"><\/script>/g, '')
-    .replace(/<meta charset[^>]*>/i, (m) => `${m}\n  ${FILES}`)
+    .replace(/<meta charset[^>]*>/i, (m) => `${m}\n  ${FILES(name)}`)
 
 // The notice Playground's License button shows, with the app: its copyright, licence, source and Playground's changes.
 export function notice(app, build) {
@@ -123,15 +129,38 @@ export function notice(app, build) {
 
 const README = (name, isolated) => `${name}, standalone
 
-Serve this folder with any static web server and open it in a browser, for example:
+This folder is the app: a page that unzips the .wasm.gz files itself, and the files it loads. Browsers don't let a page
+opened from the disk (file://) load its own files, so serve the folder and open it from there:
 
-    python3 -m http.server 8000      then open http://localhost:8000/
+    macOS, Linux:   ./run.sh      (or: python3 serve.py)
+    Windows:        run.bat       (or: py serve.py)
 
-(Opening index.html from the disk doesn't work: browsers don't let a file:// page fetch its own files.)
-${isolated ? '\nThis app needs these response headers from the server:\n    Cross-Origin-Opener-Policy: same-origin\n    Cross-Origin-Embedder-Policy: require-corp\n' : ''}
-The .wasm.gz files are unzipped by the page itself. Open and Save use the browser's own file picker and downloads.
+then open http://localhost:8000/ (it opens by itself). That needs Python 3 (python.org). Any other static web server
+works too${isolated ? ', if it sends these headers (serve.py does):\n\n    Cross-Origin-Opener-Policy: same-origin\n    Cross-Origin-Embedder-Policy: require-corp\n' : '.'}
+
+Open and Save use the browser's own file picker and downloads.
 See NOTICE.txt for the licence.
 `
+
+const SERVE = (isolated) => `# Serves this folder at http://localhost:8000/ (or the port given: python3 serve.py 9000) and opens it.
+import http.server, sys, webbrowser
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+${isolated ? "        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')\n        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')\n" : ''}        super().end_headers()
+
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+with http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler) as server:
+    url = f'http://localhost:{port}/'
+    print(f'Serving {url} (Ctrl+C to stop)')
+    webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+`
+const RUN_SH = '#!/bin/sh\ncd "$(dirname "$0")" && exec python3 serve.py "$@"\n'
+const RUN_BAT = '@echo off\r\ncd /d "%~dp0"\r\npy serve.py %* || python serve.py %*\r\npause\r\n'
 
 /**
  * Download the app as a ZIP. `base` is the build's folder ('/head/word/'); progress(done, total) is called as files arrive.
@@ -155,7 +184,7 @@ export async function downloadStandalone(app, build, base, progress = () => {}) 
       // A host that sends a .gz file with Content-Encoding: gzip (Vite's dev server does) has had it unzipped by fetch:
       // zip it again, so the copy holds what the site stores.
       if (f.path.endsWith('.gz') && /gzip/.test(r.headers.get('content-encoding') ?? '')) blob = await new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob()
-      if (f.path === 'index.html') blob = new Blob([standalonePage(await blob.text())], { type: 'text/html' })
+      if (f.path === 'index.html') blob = new Blob([standalonePage(await blob.text(), name)], { type: 'text/html' })
       entries.push({ name: `${folder}/${f.path}`, blob })
       progress((done += f.size), total)
     }
@@ -165,6 +194,9 @@ export async function downloadStandalone(app, build, base, progress = () => {}) 
   entries.push(
     { name: `${folder}/NOTICE.txt`, blob: new Blob([notice(app, build)]) },
     { name: `${folder}/README.txt`, blob: new Blob([README(name, app.isolated)]) },
+    { name: `${folder}/serve.py`, blob: new Blob([SERVE(app.isolated)]) },
+    { name: `${folder}/run.sh`, blob: new Blob([RUN_SH]), mode: 0o755 },
+    { name: `${folder}/run.bat`, blob: new Blob([RUN_BAT]) },
   )
   download(`${folder}-standalone.zip`, await zip(entries))
 }
