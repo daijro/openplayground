@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { createReadStream, existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { launch, openPage, startSite, until } from './helpers.mjs'
 
@@ -275,4 +279,46 @@ test('the bar folds away with its arrow, comes back from the tab at the top cent
   await until(async () => (await canvasTop()) === 36, 10000, 'the app to make room for the bar again')
   await until(async () => !(await tab.isVisible()), 10000, 'the tab to leave')
   assert.equal(await page.locator('.pg-bar').isVisible(), true)
+})
+
+test('Source offers the app as a standalone page: a ZIP that runs on its own, wasm and all', async (t) => {
+  const app = apps.find((a) => a.slug === 'dj-studio')
+  const build = app?.head ?? app?.release
+  if (!build) return t.skip('MixStudio is not installed')
+  const page = await openPage(browser, `${site.url}${build.path}`)
+  await page.getByRole('button', { name: 'Source code' }).click()
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: /Download as a standalone page/ }).click()])
+  const dir = mkdtempSync(join(tmpdir(), 'standalone-'))
+  await download.saveAs(join(dir, 'app.zip'))
+  execFileSync('unzip', ['-q', 'app.zip'], { cwd: dir })
+  const root = join(dir, build.path.split('/').filter(Boolean).pop())
+  // The page without the shell but with the Files stand-in; the wasm as stored (gzip), and the notice.
+  const html = readFileSync(join(root, 'index.html'), 'utf8')
+  assert.ok(!html.includes('/shell/'))
+  assert.ok(html.includes('id="playground-standalone"') && html.includes('id="playground-prelude"'))
+  const wasm = execFileSync('ls', [root]).toString().split('\n').find((f) => f.endsWith('.wasm.gz'))
+  execFileSync('gzip', ['-t', join(root, wasm)])
+  assert.match(readFileSync(join(root, 'NOTICE.txt'), 'utf8'), /Copyright \(c\) 2026 soulspin/)
+  assert.ok(existsSync(join(root, 'README.txt')))
+  await page.context().close()
+
+  // Served by any static server, it starts the app: unzips the wasm, no top bar, and `playgroundFiles` is its own.
+  const server = createServer((req, res) => {
+    const file = join(root, decodeURIComponent(req.url.split('?')[0]).replace(/\/$/, '/index.html'))
+    if (!file.startsWith(root) || !statSync(file, { throwIfNoEntry: false })?.isFile()) return res.writeHead(404).end()
+    res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream' })
+    createReadStream(file).pipe(res)
+  }).listen(0)
+  t.after(() => server.close())
+  const standalone = await browser.newPage()
+  const errors = []
+  standalone.on('pageerror', (e) => errors.push(e.message))
+  const wasmResponse = standalone.waitForResponse((r) => r.url().endsWith('.wasm.gz'))
+  await standalone.goto(`http://localhost:${server.address().port}/`)
+  assert.equal((await wasmResponse).status(), 200)
+  await standalone.locator('canvas').first().waitFor({ timeout: 30000 })
+  assert.equal(await standalone.locator('.pg-bar').count(), 0)
+  assert.equal(await standalone.evaluate(() => typeof playgroundFiles.open), 'function')
+  assert.deepEqual(errors, [])
+  await standalone.close()
 })

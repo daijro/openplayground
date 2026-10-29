@@ -109,7 +109,7 @@ const appsJson = () => ({
         const channel = (s) => s && { path: s.path, label: s.label, date: s.date ?? null, built: s.built ? (s.updated_at ?? null) : null, source: source(t, s) }
         return [{
           slug: t.slug, name: t.name, alternative: t.alternative ?? null, blurb: t.blurb, accent: t.accent, opens: t.opens ?? [], imports: t.imports ?? [], notice: t.notice ?? null,
-          repo: t.repo, license: t.license ?? null, copyright: [t.copyright ?? []].flat(),
+          repo: t.repo, isolated: !!t.isolated, license: t.license ?? null, copyright: [t.copyright ?? []].flat(),
           icon: `${(release ?? head).path}site-icon${extname(t.icon)}`,
           alternativeIcon: alternativeIcon(t) ? `${(release ?? head).path}alternative-icon${extname(alternativeIcon(t))}` : null,
           release: channel(release) ?? null, head: channel(head) ?? null,
@@ -159,11 +159,28 @@ const toolIndex = (req, res, next) => {
   next()
 }
 
+// What a standalone copy of an installed app holds (shell/standalone.js): every file of its folder but the stamps and
+// the dashboard's alternative-icon, with sizes, listed at <app>/playground-manifest.json (made here, so installs made
+// before it existed have one too).
+export const MANIFEST = 'playground-manifest.json'
+export const manifest = (dir) =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && !/(^|\/)\./.test(join(e.parentPath, e.name)) && !/^(alternative-icon\.[a-z]+|playground-manifest\.json)$/.test(e.name))
+    .map((e) => ({ path: join(e.parentPath, e.name).slice(dir.length + 1), size: statSync(join(e.parentPath, e.name)).size }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+const installedDirs = () =>
+  parse(readFileSync('tools.yaml', 'utf8')).groups.flatMap((g) => g.tools).flatMap((t) => ['release', 'head'].flatMap((c) => installed(t, c)?.path ?? []))
+
 const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 // The shell (top bar, file explorer, browser file storage: the shell/ folder) at /shell/, for the app pages
 // and /files/. Served as-is, not through Vite's module pipeline, exactly as the built site serves it.
 const shell = (req, res, next) => {
   const path = req.url.split('?')[0]
+  const app = path.endsWith(`/${MANIFEST}`) && installedDirs().find((dir) => path === `${dir}${MANIFEST}`)
+  if (app) {
+    res.writeHead(200, { 'content-type': TYPES['.json'], 'cache-control': 'no-cache' })
+    return res.end(JSON.stringify(manifest(`public${app}`.replace(/\/$/, ''))))
+  }
   if (!path.startsWith('/shell/')) return next()
   const name = path.slice('/shell/'.length)
   if (name === 'apps.json') {
@@ -201,6 +218,7 @@ export default defineConfig({
       apply: 'build',
       closeBundle() {
         cpSync('shell', 'dist/shell', { recursive: true })
+        for (const dir of installedDirs()) writeFileSync(`dist${dir}${MANIFEST}`, JSON.stringify(manifest(`public${dir}`.replace(/\/$/, ''))))
         writeFileSync('dist/shell/apps.json', JSON.stringify(appsJson()))
         writeFileSync('dist/_headers', isolatedPaths().map((path) => `${path}*\n${Object.entries(isolationHeaders).map(([name, value]) => `  ${name}: ${value}`).join('\n')}`).join('\n') + '\n')
         writeFileSync('dist/_redirects', Object.entries(aliases()).map(([from, to]) => `${from} ${to} 302`).join('\n') + '\n')

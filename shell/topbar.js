@@ -111,7 +111,7 @@ export async function mountTopbar() {
     ].filter(Boolean),
   )
   bar.append(menu)
-  if (build?.source) mountSource(bar, app, build.source)
+  if (build?.source) mountSource(bar, app, build, here.path)
   mountLicense(bar, app, build)
 }
 
@@ -189,10 +189,25 @@ function mountLicense(bar, app, build) {
 
 // Source: the app's code at the version this build is of, its licence there, and the patch files Playground built it
 // with, at the commit that built them (vite.config.js `source`); each opens on GitHub in a new tab.
-function mountSource(bar, app, src) {
+function mountSource(bar, app, build, base) {
+  const src = build.source
   const link = (name, title, detail, href) =>
     h('a', { class: 'pg-app', role: 'menuitem', href, target: '_blank', rel: 'noopener', onclick: () => menu.hidePopover() }, icon(name), h('span', {}, h('strong', {}, title), h('small', {}, detail)))
   const own = (app.own ?? app).name
+  // The app as a standalone page (shell/standalone.js): a ZIP of this build's files, and a page that unzips and runs them.
+  const detail = h('small', {}, 'A ZIP: the wasm and a page that runs it')
+  const standalone = h('button', { class: 'pg-app', role: 'menuitem', type: 'button' }, icon('download'), h('span', {}, h('strong', {}, 'Download as a standalone page'), detail))
+  standalone.addEventListener('click', async () => {
+    standalone.disabled = true
+    try {
+      const { downloadStandalone } = await import('./standalone.js')
+      await downloadStandalone(app, build, base, (done, total) => (detail.textContent = `Preparing… ${Math.round((done / total) * 100)}%`))
+      detail.textContent = 'Downloaded'
+    } catch (e) {
+      detail.textContent = e.message
+    }
+    standalone.disabled = false
+  })
   const menu = h(
     'div',
     { class: 'pg-apps pg-source', id: 'pg-source', popover: 'auto', role: 'menu', 'aria-label': 'Source code' },
@@ -206,6 +221,8 @@ function mountSource(bar, app, src) {
           h('p', { class: 'pg-source-note' }, `Licensed like ${own}${src.license ? `: ${src.license}` : ''}.`),
         ]
       : h('p', { class: 'pg-source-note' }, `This is ${own}'s own release, unpatched.`),
+    h('p', { class: 'pg-apps-group' }, 'Run it yourself'),
+    standalone,
   )
   const button = h('button', { class: 'pg-bar-btn pg-source-btn', type: 'button', popovertarget: 'pg-source', 'aria-haspopup': 'menu', 'aria-label': 'Source code', title: 'Source code' }, icon('code'), h('span', { class: 'pg-label' }, 'Source'))
   // Source, then License (mountLicense), then Files.
