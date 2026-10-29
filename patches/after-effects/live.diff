@@ -300,7 +300,7 @@ index 0000000..ba7d032
 +/// ([`presence::cursor`]). What doesn't resolve here (another comp, a layer gone, a wild number) is skipped.
 +fn draw_viewer(app: &EffectcraftApp, painter: &egui::Painter, map: &ViewerMap) {
 +    let Some((cid, comp)) = app.session.active_comp_id().and_then(|c| Some((c, app.session.project.comp(c)?))) else { return };
-+    let ectx = EvalCtx { project: &app.session.project, comp_id: cid, comp, time: app.session.time(), expr: app.session.expr.as_deref(), footage: None };
++    let ectx = EvalCtx { expr: app.session.expr.as_deref(), ..EvalCtx::new(&app.session.project, cid, comp, app.session.time()) };
 +    let ctx = painter.ctx();
 +    // Points per comp pixel, and a jump wider than this goes at once.
 +    let (px, far) = (f64::from(map.zoom), f64::from(map.area.width().max(map.area.height())) / 4.0);
@@ -449,7 +449,7 @@ index 0000000..ba7d032
 +    let s = &app.session;
 +    let Some(comp) = s.project.comp(cid) else { return };
 +    let (drawing, time) = (DRAWING.get(), s.time());
-+    let now = EvalCtx { project: &s.project, comp_id: cid, comp, time, expr: s.expr.as_deref(), footage: None };
++    let now = EvalCtx { expr: s.expr.as_deref(), ..EvalCtx::new(&s.project, cid, comp, time) };
 +    let line = |p: PathInfo| polyline(&flatten(&p.sp, &p.m, &ViewerMap { origin: Pos2::ZERO, zoom: 1.0, comp: [0.0; 2], area: Rect::NOTHING }), drawing.zoom);
 +    let pen = drawing.pen.filter(|(l, _)| comp.layer(*l).is_some());
 +    let mut strokes: Vec<Vec<f64>> = pen.and_then(|(l, uid)| path_of(&now, l, uid)).map(line).into_iter().collect();
@@ -999,7 +999,7 @@ index 0000000..ba7d032
 +        let hit = |a: &EffectcraftApp, at: [f64; 2]| {
 +            let s = &a.session;
 +            let cc = s.project.comp(c).unwrap();
-+            let ectx = EvalCtx { project: &s.project, comp_id: c, comp: cc, time: s.time(), expr: s.expr.as_deref(), footage: None };
++            let ectx = EvalCtx { expr: s.expr.as_deref(), ..EvalCtx::new(&s.project, c, cc, s.time()) };
 +            crate::panels::viewer::layer_at(&ectx, at).map(|l| l.id.0)
 +        };
 +        let (title, at) = (a.session.active_comp().unwrap().layers[1].id.0, [700.0, 500.0]);
@@ -1038,7 +1038,7 @@ index 0000000..ba7d032
 +        DOWN.set(true);
 +        a.session.execute("prop.set", json!({"layer": layers[0], "path": "transform/position", "value": [100, 50, 0], "merge": "drag"})).unwrap();
 +        let (s, cc) = (&a.session, a.session.project.comp(c).unwrap());
-+        let ectx = EvalCtx { project: &s.project, comp_id: c, comp: cc, time: s.time(), expr: s.expr.as_deref(), footage: None };
++        let ectx = EvalCtx { expr: s.expr.as_deref(), ..EvalCtx::new(&s.project, c, cc, s.time()) };
 +        let outline: Vec<Value> = layer_outline(&ectx, &cc.layers[0]).concat().into_iter().map(|v| json!(tenth(v))).collect();
 +        let ghost: Value = std::iter::once(json!(layers[0])).chain(outline).collect();
 +        assert_eq!(a.live_presence()["ghosts"], json!([ghost]));
