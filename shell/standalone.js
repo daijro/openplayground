@@ -144,8 +144,6 @@ Every system needs two things:
   2. A recent browser: Chrome or Edge (recommended), Firefox or Safari.
 
 First, extract the ZIP completely. Run everything from the extracted folder, not from inside a ZIP viewer.
-The server prints  Serving http://localhost:8000/  and opens your browser when it can. If the browser doesn't open,
-open http://localhost:8000/ yourself. Keep the server running while you use the app, and stop it with Ctrl+C.
 
 Sections, in order: iPhone and iPad, Android, ChromeOS, Windows, macOS, Linux.
 
