@@ -293,6 +293,7 @@ index 0000000..54446a9
 +            roots,
 +            layers: out,
 +            title: current.title.clone(),
++            source_metadata: current.source_metadata.clone(),
 +        })
 +    })
 +}
