@@ -128,17 +128,146 @@ export function notice(app, build) {
 }
 
 const README = (name, isolated) => `${name}, standalone
+${'='.repeat(name.length + 12)}
 
-This folder is the app: a page that unzips the .wasm.gz files itself, and the files it loads. Browsers don't let a page
-opened from the disk (file://) load its own files, so serve the folder and open it from there:
+This folder is the whole app: a page that unzips the .wasm.gz files itself, and the files it loads.
 
-    macOS, Linux:   ./run.sh      (or: python3 serve.py)
-    Windows:        run.bat       (or: py serve.py)
+Browsers don't let a page opened from the disk (a file:// address) load its own files, so double-clicking
+index.html shows an error. The folder has to be served by a small web server on your own computer. The scripts here
+do that for you, and open the app in your browser by themselves. Nothing leaves your machine: the server only listens
+on this computer (127.0.0.1).
 
-then open http://localhost:8000/ (it opens by itself). That needs Python 3 (python.org). Any other static web server
-works too${isolated ? ', if it sends these headers (serve.py does):\n\n    Cross-Origin-Opener-Policy: same-origin\n    Cross-Origin-Embedder-Policy: require-corp\n' : '.'}
+You need two things:
+  1. Python 3, to run the server (steps per system below).
+  2. A recent browser: Chrome or Edge (recommended), Firefox or Safari.
 
-Open and Save use the browser's own file picker and downloads.
+First, extract the ZIP completely. Run the scripts from the extracted folder, not from inside the ZIP viewer.
+
+--------------------------------------------------------------------------------------------------------------
+WINDOWS
+--------------------------------------------------------------------------------------------------------------
+Recommended: double-click run.bat. A window opens, the server starts and your browser opens the app. Keep the
+window open while you use the app; close it, or press Ctrl+C in it, to stop.
+
+Install Python 3 first, if run.bat says it isn't found:
+  - Download the installer from https://www.python.org/downloads/windows/ and run it. On its first screen tick
+    "Add python.exe to PATH" (and leave "py launcher" ticked), then choose Install Now.
+  - Or install "Python 3" from the Microsoft Store.
+  Then double-click run.bat again.
+
+If Windows says "Windows protected your PC" (SmartScreen), choose More info, then Run anyway. run.bat is a few
+readable lines: open it in Notepad to see what it does.
+
+If typing "python" in a window opens the Microsoft Store instead, Python isn't installed yet: use one of the two
+installs above.
+
+Manual way: open a Command Prompt in this folder and run   py serve.py   then open http://localhost:8000/
+
+--------------------------------------------------------------------------------------------------------------
+macOS
+--------------------------------------------------------------------------------------------------------------
+Recommended: open the Terminal app, type   cd   and a space, drag this folder onto the window, press Return, then run
+
+    sh run.sh
+
+The server starts and your browser opens the app. Press Ctrl+C in Terminal to stop. (./run.sh does the same once
+the folder is extracted with its permissions; sh run.sh always works.)
+
+Install Python 3 first, if Terminal says "python3: command not found", or macOS offers to install "command line
+developer tools" (that offer is the quickest way, and gives you python3):
+  - Accept that offer, or run   xcode-select --install   and wait for it to finish; or
+  - download the installer from https://www.python.org/downloads/macos/ and run it; or
+  - with Homebrew (https://brew.sh):   brew install python
+Then run   sh run.sh   again.
+
+Double-clicking run.sh doesn't start it (macOS opens it in a text editor): use Terminal as above.
+
+Manual way: in Terminal, in this folder, run   python3 serve.py   then open http://localhost:8000/
+
+--------------------------------------------------------------------------------------------------------------
+LINUX (and ChromeOS with Linux turned on)
+--------------------------------------------------------------------------------------------------------------
+Recommended: open a terminal in this folder and run
+
+    sh run.sh
+
+The server starts and your default browser opens the app. Press Ctrl+C to stop. (Your file manager may also run
+run.sh if you make it executable: chmod +x run.sh.)
+
+Python 3 is already installed on most distributions. If run.sh says python3 isn't found:
+  - Debian, Ubuntu, Mint:   sudo apt install python3
+  - Fedora:                 sudo dnf install python3
+  - Arch, Manjaro:          sudo pacman -S python
+  - openSUSE:               sudo zypper install python3
+If no browser opens (no desktop, or ChromeOS Linux), open http://localhost:8000/ in your browser by hand.
+
+Manual way: python3 serve.py   then open http://localhost:8000/
+
+--------------------------------------------------------------------------------------------------------------
+ANDROID
+--------------------------------------------------------------------------------------------------------------
+Nothing on a phone runs run.sh or run.bat by itself, and the easiest way to use ${name} on Android is the
+Playground site in Chrome, which needs none of this. To run this copy anyway, you need an app that can run Python:
+Termux (a terminal for Android).
+
+  1. Install Termux from F-Droid (https://f-droid.org/packages/com.termux/). F-Droid's is the version its
+     developers keep up to date; the Play Store one may be older and behave differently.
+  2. Extract this ZIP with your Files app (tap the ZIP, then Extract). Note where the folder ends up, for example
+     Downloads.
+  3. Open Termux and give it access to your files (a prompt appears; allow it):
+         termux-setup-storage
+  4. Install Python once:
+         pkg install python
+  5. Go to the extracted folder (the one that holds serve.py and index.html: use ls to look around; this
+     example assumes it is somewhere in Downloads) and start the server:
+         cd ~/storage/downloads
+         ls
+         cd the-folder-that-holds-serve.py
+         python serve.py
+  6. Open Chrome and go to  http://localhost:8000/   (Termux can't open the browser for you).
+     Leave Termux running, in the background (Android may stop it to save battery: allow it to run unrestricted
+     in Settings if the app stops responding). To stop, go back to Termux and press Ctrl+C (the CTRL key above
+     the keyboard, then C).
+
+Not tested on a device. A phone has far less memory than a computer: big apps may run out of it and Chrome may
+close the tab. Chrome or another recent Chromium browser works best.
+
+--------------------------------------------------------------------------------------------------------------
+iOS (iPhone) and iPadOS (iPad)
+--------------------------------------------------------------------------------------------------------------
+iOS and iPadOS can't run run.sh or run.bat, don't let a page in Safari read a folder, and stop apps that run in
+the background. The easiest way to use ${name} on an iPhone or iPad is the Playground site in Safari (Share, then
+Add to Home Screen), which needs none of this.
+
+To run this copy anyway, you need an app that can run a local web server. a-Shell (free, on the App Store) is a
+terminal with Python on iOS and iPadOS:
+
+  1. Install a-Shell from the App Store, and extract this ZIP in the Files app (tap the ZIP).
+  2. Open a-Shell. To reach the folder, run   pickFolder   and choose the extracted folder in the list that opens
+     (a-Shell remembers it afterwards; see its help for how to cd to it).
+  3. In the folder, run   python3 serve.py
+  4. On an iPad: put Safari beside a-Shell in Split View or Slide Over, and open  http://localhost:8000/
+     On an iPhone: switching to Safari pauses a-Shell, which stops the server; this may not work there at all.
+  5. To stop, go back to a-Shell and press Ctrl+C.
+
+Not tested on a device. iOS also limits how much memory a page may use, so big apps may not load, and some need
+features older iOS and Safari versions lack.
+
+--------------------------------------------------------------------------------------------------------------
+ANY SYSTEM, WITHOUT THE SCRIPTS
+--------------------------------------------------------------------------------------------------------------
+Any static web server will do, serving this folder: for example   php -S localhost:8000   or   npx serve   .
+${isolated ? `This app needs these two response headers from the server (serve.py sends them; most other servers
+don't, and the app won't start without them):
+
+    Cross-Origin-Opener-Policy: same-origin
+    Cross-Origin-Embedder-Policy: require-corp
+` : 'Nothing special is needed from the server.'}
+To use another port (if 8000 is taken):   sh run.sh 9000   or   run.bat 9000   or   python3 serve.py 9000
+
+Open and Save use the browser's own file picker and downloads. What the app saves stays on your computer, in your
+Downloads folder, nowhere else.
+
 See NOTICE.txt for the licence.
 `
 

@@ -299,7 +299,9 @@ test('Source offers the app as a standalone page: a ZIP that runs on its own, wa
   const wasm = execFileSync('ls', [root]).toString().split('\n').find((f) => f.endsWith('.wasm.gz'))
   execFileSync('gzip', ['-t', join(root, wasm)])
   assert.match(readFileSync(join(root, 'NOTICE.txt'), 'utf8'), /Copyright \(c\) 2026 soulspin/)
-  assert.ok(existsSync(join(root, 'README.txt')))
+  const readme = readFileSync(join(root, 'README.txt'), 'utf8')
+  for (const part of ['WINDOWS', 'macOS', 'LINUX', 'ANDROID', 'iOS (iPhone) and iPadOS', 'Recommended: double-click run.bat', 'sh run.sh', 'Termux', 'a-Shell']) assert.ok(readme.includes(part), part)
+  assert.ok(!/\$\{/.test(readme), 'no template left in the README')
   await page.context().close()
 
   // Opened from the disk it says what to run, rather than failing on the browser's file:// rules.
