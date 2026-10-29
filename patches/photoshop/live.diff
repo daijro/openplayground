@@ -1657,11 +1657,11 @@ new file mode 100644
 index 0000000..cff21cc
 --- /dev/null
 +++ b/crates/engine/src/live.rs
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,49 @@
 +//! Live editing in a Playground session (web; patches/photoshop/live.diff): a shared document installed as a change
-+//! made elsewhere. A child of the crate root so it reaches the open documents and `fix_active`.
++//! made elsewhere. A child of the crate root so it reaches the open documents (it repeats session's private `fix_active`).
 +
-+use super::{Document, Session, fix_active, layer_multi_cmds};
++use super::{Document, Session, channel_cmds, fix_selection, layer_multi_cmds};
 +use std::sync::Arc;
 +
 +impl Session {
@@ -1677,7 +1677,11 @@ index 0000000..cff21cc
 +        st.history.clear();
 +        st.snapshots.clear();
 +        st.coalesce = None;
-+        fix_active(st);
++        if st.active_layer.is_none_or(|id| st.doc.layer(id).is_none()) {
++            st.active_layer = st.doc.top_layer();
++        }
++        fix_selection(st);
++        channel_cmds::fix_view(st);
 +        st.revision += 1;
 +        st.last_damage = damage;
 +        true

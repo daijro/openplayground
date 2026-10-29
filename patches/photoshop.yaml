@@ -166,15 +166,20 @@
 # menus::is_enabled, which enables Edit › Undo and its shortcut: while connected, Undo and Redo of the shared document
 # go to the session (Free Transform and a crop box keep their own steps). Verify: the e2e's undo step reverts only the
 # owner's stroke after the editor's arrived.
+# The marquee under way as the canvas previews it (ui-egui/src/live.rs): upstream exports it from `canvas` for tests only.
+- live: true
+  file: crates/ui-egui/src/canvas.rs
+  find: '(?![\s\S])'
+  after: "\n#[cfg(not(test))]\npub(crate) use drag::marquee_preview_px;\n"
 - live: true
   file: crates/ui-egui/src/lib.rs
   find: '(?![\s\S])'
   after: "\n// Live editing in a Playground session (web, and debug builds for the native tests).\n#[cfg(any(target_arch = \"wasm32\", debug_assertions))]\npub mod live;\n"
 - live: true
-  file: crates/ui-egui/src/lib.rs
+  file: crates/ui-egui/src/app/commands.rs
   find: 'pub\s+fn\s+run\s*\(\s*&mut\s+self\b[^{]*\{'
   after: "\n        #[cfg(any(target_arch = \"wasm32\", debug_assertions))] if crate::live::undo(self, id, true) { return Ok(serde_json::Value::Bool(true)); }"
 - live: true
-  file: crates/ui-egui/src/menus.rs
+  file: crates/ui-egui/src/menus/state.rs
   find: 'pub\s+fn\s+is_enabled\s*\(\s*app\s*:[^{]*\{'
   after: "\n    #[cfg(any(target_arch = \"wasm32\", debug_assertions))] if crate::live::undo(app, id, false) { return true; }"
