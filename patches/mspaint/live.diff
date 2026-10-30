@@ -29,7 +29,7 @@ index 0000000..54446a9
 +use crate::app::WebApp;
 +use crate::editor::MAX_PIXELS;
 +use paintcraft_core::types::Rgba;
-+use paintcraft_document::{Document, LAYER_COUNT_MAX, Layer};
++use paintcraft_document::{Document, FilterStack, LAYER_COUNT_MAX, Layer};
 +use paintcraft_raster::{Admission, RasterLayer, TILE_EDGE, TileVersion};
 +use playground_live::{Live, Presence, presence};
 +use serde_json::{Map, Value, json};
@@ -284,7 +284,9 @@ index 0000000..54446a9
 +                }
 +            }
 +            roots.push(l.id);
-+            out.insert(l.id, Layer { id: l.id, name: l.name.to_owned(), origin: l.origin, visible: l.visible, opacity: l.opacity, raster });
++            // Filters are not shared: a kept layer keeps its own, a new one has none.
++            let filters = current.layers.get(&l.id).map(|o| o.filters.clone()).map_or_else(|| FilterStack::new(Vec::new()).map_err(invalid), Ok)?;
++            out.insert(l.id, Layer { id: l.id, name: l.name.to_owned(), origin: l.origin, visible: l.visible, opacity: l.opacity, raster, filters });
 +        }
 +        Ok(Document {
 +            document_id: current.document_id,
