@@ -1,0 +1,188 @@
+# ClothCraft in the browser. Upstream (github.com/erythrofr/ClothCraft) has no browser build (no wasm32 code at all) and
+# no releases; these patches add the web build Playground serves, from its head commit.
+#
+# patches/marvelous-designer/web.diff adds new files only:
+#   index.html, Trunk.toml     the web build at the repository's root (build.mjs builds there): trunk builds the
+#                              `cloth-fit` binary, whose editor (src/atelier.rs) is the desktop's, for the page's canvas.
+#   src/atelier/web.rs         the page's side: `cloth-fit`'s `main` on wasm starts the editor with the T-shirt on the
+#                              mannequin (`cloth-fit --steps 0 --view`, the mannequin OBJ built into the page), and the
+#                              rest of the desktop's code takes `eframe` and `rfd` from here: `run_native` starts the app
+#                              on the canvas, and Open, Save, Save As and the importers' Choose buttons are Playground's
+#                              dialogs (`playgroundFiles`). "Open in ClothCraft" and a dropped file open a garment (JSON,
+#                              with its avatar from the `.assets` folder beside it), or import an avatar (OBJ, GLB,
+#                              self-contained glTF), DXF or SVG outlines, as the matching menu item does. What ClothCraft
+#                              writes outside /tmp (a saved garment and its .assets folder, an export) goes to Files after
+#                              the frame, and a save to download is handed to the browser once written.
+#   src/atelier/worker_web.rs  the simulation worker without its thread: see below.
+#   clothcraft-playground/     what wasm32-unknown-unknown lacks: `std` with web-time's clock, an in-memory file system
+#                              and a `process::id`, and a temporary folder in memory. The modules that use them take `std`
+#                              from it on wasm through ONE `use` line at their end (a local `std` shadows the standard
+#                              library's name in that module, and in every module below it that takes `use super::*`;
+#                              everything else in it still comes from the real std).
+#
+# The simulation. Upstream's editor solves on a worker thread (src/atelier/worker.rs) with Rayon's threads under it, and its
+# GPU path waits on the GPU (`device.poll`, `pollster::block_on`). A page has one thread and can't wait, so: Rayon runs
+# where it is called (its own fallback on targets without threads: the page's thread is its one worker; the patches never
+# build its pool), the worker's loop is one `pump` before every frame (worker_web.rs) that solves a due step in place, and
+# the solver is the CPU one (VBD with OGC contact, in f64) whatever "GPU compute" says (greyed out, saying why). The GPU
+# solver stays off on WebGPU too: reading its results back is asynchronous there, and its compute shaders don't exist on
+# WebGL2. The 3D view draws through eframe's wgpu on WebGPU where the browser has it, else WebGL2 (the `webgl` feature,
+# added below): upstream's own shaders for it use only uniforms and vertex buffers, so both run it.
+# What that costs: the T-shirt (2454 vertices, 16 iterations) takes about 0.7 s a step in a browser (0.5 s on one native
+# core, 0.2 s on four), against about 4 ms for the desktop's hybrid GPU solver on the same machine: the cloth moves, at
+# a few steps a second (0.02-0.03x real time at the default 1/60 s step).
+# Off: the avatar's inspector (a thread that never starts: "Could not start inspection"), Report issue (a temporary folder
+# on disk), Recover snapshot… (there are none) and importing a native template JSON. Preferences, workspace profiles
+# and recovery snapshots live for the page (the export folder, /ClothCraft/Export, goes to Files without them). The
+# unsaved-changes question is the browser's own confirm (OK discards, Cancel stays). Native builds see none of this:
+# every rule adds wasm-only lines.
+
+# Rule 1/41: the dependencies, all wasm-only: the playground crate, wgpu's WebGPU and WebGL2 backends (eframe's own wgpu
+# has neither), wasm-bindgen and the web-sys classes the page uses.
+- file: Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/marvelous-designer.yaml): std's clock and files, the page's canvas and its dialogs, and\n# wgpu's WebGPU and WebGL2 backends (eframe's own leave both off).\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nclothcraft-playground = { path = \"clothcraft-playground\" }\nwgpu = { version = \"30\", features = [\"webgpu\", \"webgl\"] }\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"HtmlCanvasElement\"] }\n"
+
+# Rules 2-3/41: `cloth-fit`'s native `main` (argument parsing, a Rayon pool, files on disk) stays native-only; on wasm
+# `main` is the editor with the T-shirt on the mannequin (atelier/web.rs).
+- file: src/bin/cloth-fit.rs
+  find: '^fn main\(\)'
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/bin/cloth-fit.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the T-shirt on the mannequin in the editor (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")]\nfn main() {\n    fitting_editor::web_main();\n}\n"
+
+# Rules 4-6/41: the other desktop binary, `marvelous-cloth` (src/main.rs, whose own editor, src/editor.rs, runs a native window
+# and which `cargo check` builds as well) is native-only: on wasm it only has its headless mode.
+- file: src/main.rs
+  find: '#\[cfg\(feature = "desktop"\)\]\nmod editor;'
+  replace: "#[cfg(all(feature = \"desktop\", not(target_arch = \"wasm32\")))]\nmod editor;"
+- file: src/main.rs
+  find: '#\[cfg\(feature = "desktop"\)\]\n    \{\n        editor::run'
+  replace: "#[cfg(all(feature = \"desktop\", not(target_arch = \"wasm32\")))]\n    {\n        editor::run"
+- file: src/main.rs
+  find: '#\[cfg\(not\(feature = "desktop"\)\)\]\n    \{\n        Err\("Built without'
+  replace: "#[cfg(any(not(feature = \"desktop\"), target_arch = \"wasm32\"))]\n    {\n        Err(\"Built without"
+
+# Rules 7-11/41: the editor (src/atelier.rs). The window icon, a 3.5 MB PNG, stays out of the page; its own clock and files
+# (and its children's that take `use super::*`) come from the playground crate, `eframe` from the page's, and `web_main`
+# (see above) is handed to cloth-fit. The GPU solver is off, as is its checkbox (chrome.rs), and the renderer benchmark (gpu_bench.rs) takes no adapter list, which a page lacks.
+- file: src/atelier.rs
+  find: 'let icon =\s*eframe::icon_data::from_png_bytes\(include_bytes!\("[^"]*"\)\)\s*\.map_err\(\|error\| format!\("[^"]*"\)\)\?;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $&\n    #[cfg(target_arch = \"wasm32\")]\n    let icon = egui::IconData::default();"
+- file: src/atelier.rs
+  find: '^\s*gpu: true,'
+  replace: "                #[cfg(not(target_arch = \"wasm32\"))]\n                gpu: true,\n                #[cfg(target_arch = \"wasm32\")]\n                gpu: false,"
+- file: src/atelier.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the page (atelier/web.rs), whose eframe starts the app on the canvas, and the clock and files that\n// the modules below taking `use super::*` share (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n#[cfg(target_arch = \"wasm32\")] use documents_ui::web::eframe;\n#[cfg(target_arch = \"wasm32\")] pub use documents_ui::web::main as web_main;\n"
+- file: src/atelier/chrome.rs
+  find: 'ui\.checkbox\(&mut self\.gpu, "GPU compute"\);'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n                    $&\n                    #[cfg(target_arch = \"wasm32\")]\n                    ui.add_enabled(false, egui::Checkbox::new(&mut self.gpu, \"GPU compute\"))\n                        .on_disabled_hover_text(\"The GPU solver reads its results back by waiting on the GPU, which a page can't do: the browser build runs the CPU solver.\");"
+
+- file: src/gpu_bench.rs
+  find: '^\s*available_adapters: vec!\[adapter\],'
+  replace: "        // Playground's browser build: no adapter list on a page (patches/marvelous-designer.yaml).\n        #[cfg(not(target_arch = \"wasm32\"))]\n        available_adapters: vec![adapter],"
+
+# Rules 12-15/41: the documents. Playground's dialogs and the page (documents_ui/web.rs, declared at the end of
+# documents_ui.rs so it sees what the menu items use); a garment's avatar is looked up in the in-memory files, which
+# `Path::is_file` can't see; and a save writes the file at once, as there is no temporary file to rename (document.rs).
+- file: src/atelier/documents_ui.rs
+  find: '^use rfd::\{FileDialog, MessageButtons, MessageDialog, MessageDialogResult\};'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n$&\n// Playground's dialogs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse web::rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult};"
+- file: src/atelier/documents_ui.rs
+  find: '!project\.avatar_path\.is_file\(\)'
+  replace: '!avatar_present(&project.avatar_path)'
+- file: src/atelier/documents_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the page's side, and whether an avatar is in the in-memory files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")]\n#[path = \"web.rs\"]\npub(crate) mod web;\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n#[cfg(not(target_arch = \"wasm32\"))]\nfn avatar_present(path: &std::path::Path) -> bool {\n    path.is_file()\n}\n#[cfg(target_arch = \"wasm32\")]\nfn avatar_present(path: &std::path::Path) -> bool {\n    clothcraft_playground::std::fs::is_file(path)\n}\n"
+- file: src/document.rs
+  find: 'pub fn atomic_write\(path: &Path, bytes: &\[u8\]\) -> Result<\(\), String> \{'
+  after: "\n    // Playground's browser build: the in-memory files have no temporary file to rename (patches/marvelous-designer.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    return fs::write(path, bytes).map_err(|e| e.to_string());"
+
+# Rules 16-17/41: the simulation worker (see the top): the thread's version stays native-only, and on wasm worker_web.rs
+# gives `start` and `pump`.
+- file: src/atelier/worker.rs
+  find: '^pub\(super\) fn start\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/atelier/worker.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the worker without its thread, and the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n#[cfg(target_arch = \"wasm32\")]\n#[path = \"worker_web.rs\"]\nmod web;\n#[cfg(target_arch = \"wasm32\")] pub(crate) use web::{pump, start};\n"
+
+# Rules 18-41/41: the modules that use the clock or the files outside the editor's tree take `std` from the playground
+# crate on wasm (see the top). Found with: every non-test module that names Instant, SystemTime, fs:: or File:: and runs on
+# the page, except those the page never reaches (the solver lab, the GPU solver, the avatar inspector, project.rs, the
+# issue report and session protocol). If upstream starts using these in another module, give it the same line; a missing
+# one panics at the first clock call (the page then stops) or fails the file call (a status line says so).
+- file: src/document.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/fitting.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/avatar.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/garment/template.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/garment/export.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/pattern_import.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/gltf_avatar.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/avatar_import.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files, and the folder an imported avatar is staged in (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::{std, tempfile};\n"
+- file: src/solver.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/vbd.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, here and in vbd/'s modules (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/vbd/seam_blocks.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/vbd/audit.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/ogc/world.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/perf.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/selection.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock; this module and the ones below take `use super::*` and `use std::…` both, which\n// atelier.rs's `std` makes ambiguous without it (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/authoring_smoke.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: see selection.rs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/issue_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: see selection.rs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/pins_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: see selection.rs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/radial.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: see selection.rs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/workspace.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: see selection.rs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/svg_import_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/settings.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/stage_settings.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/workspace_profiles.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"

@@ -1,0 +1,889 @@
+diff --git a/Trunk.toml b/Trunk.toml
+new file mode 100644
+index 0000000..f93cc8f
+--- /dev/null
++++ b/Trunk.toml
+@@ -0,0 +1,7 @@
++# ClothCraft in the browser, for Playground (patches/marvelous-designer.yaml in github.com/daijro/openplayground).
++# Build with: trunk build --release   (from the repository's root)
++[build]
++target = "index.html"
++public_url = "./"
++filehash = true
++dist = "target/trunk-dist"
+diff --git a/clothcraft-playground/Cargo.toml b/clothcraft-playground/Cargo.toml
+new file mode 100644
+index 0000000..2173dea
+--- /dev/null
++++ b/clothcraft-playground/Cargo.toml
+@@ -0,0 +1,13 @@
++# Playground's browser build of ClothCraft (patches/marvelous-designer.yaml in github.com/daijro/openplayground): std's
++# clock, files and process id as wasm32-unknown-unknown can have them, and a temporary folder. Native builds compile it
++# empty.
++[package]
++name = "clothcraft-playground"
++version = "0.1.0"
++edition = "2024"
++description = "ClothCraft in the browser: the clock, files and temporary folders std lacks on wasm32-unknown-unknown"
++license = "MIT"
++publish = false
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++web-time = "1"
+diff --git a/clothcraft-playground/src/lib.rs b/clothcraft-playground/src/lib.rs
+new file mode 100644
+index 0000000..049b307
+--- /dev/null
++++ b/clothcraft-playground/src/lib.rs
+@@ -0,0 +1,263 @@
++// SPDX-License-Identifier: MIT
++//! ClothCraft in the browser, for Playground (patches/marvelous-designer.yaml in github.com/daijro/openplayground).
++//!
++//! wasm32-unknown-unknown has no clock, no files and no process: `Instant::now` and `SystemTime::now` panic there,
++//! every file call fails and `process::id` panics. The modules that use them take `std` from here instead, through one
++//! `#[cfg(target_arch = "wasm32")] use clothcraft_playground::std;` line at each one's end (a local `std` shadows the
++//! standard library's name in that module; everything else in it still comes from the real std):
++//!   time     web-time's Instant and SystemTime;
++//!   fs       an in-memory file system (garments, avatars, exports, settings), each change noted for the page to mirror
++//!            to Playground's Files;
++//!   process  `id` is 1.
++//! And [`tempfile`]: the temporary folder an imported avatar is staged in, in memory.
++#![cfg(target_arch = "wasm32")]
++
++pub mod std {
++    pub use ::std::*;
++
++    pub mod time {
++        pub use web_time::*;
++    }
++
++    pub mod process {
++        pub use ::std::process::*;
++
++        /// The page is one process (std's panics on wasm).
++        pub fn id() -> u32 {
++            1
++        }
++    }
++
++    pub mod fs {
++        // What isn't here (OpenOptions, metadata, ...) is std's, which fails on a page.
++        pub use ::std::fs::*;
++        use ::std::cell::RefCell;
++        use ::std::collections::{BTreeMap, BTreeSet};
++        use ::std::io::{self, Cursor, Read, Write};
++        use ::std::path::{Component, Path, PathBuf};
++
++        enum Entry {
++            Dir,
++            File(Vec<u8>),
++        }
++
++        #[derive(Default)]
++        struct Tree {
++            entries: BTreeMap<PathBuf, Entry>,
++            /// Paths written, created or removed since the last [`changes`].
++            changed: BTreeSet<PathBuf>,
++        }
++
++        thread_local! {
++            static TREE: RefCell<Tree> = RefCell::default();
++        }
++
++        fn with<T>(f: impl FnOnce(&mut Tree) -> T) -> T {
++            TREE.with(|t| f(&mut t.borrow_mut()))
++        }
++
++        /// `/a/./b/../c` -> `/a/c`: one spelling per file (relative paths start at `/`).
++        pub fn key(p: &Path) -> PathBuf {
++            let mut out = PathBuf::from("/");
++            for c in p.components() {
++                match c {
++                    Component::ParentDir => {
++                        out.pop();
++                    }
++                    Component::Normal(n) => out.push(n),
++                    _ => {}
++                }
++            }
++            out
++        }
++
++        fn missing(p: &Path) -> io::Error {
++            io::Error::new(io::ErrorKind::NotFound, format!("{} does not exist", p.display()))
++        }
++
++        impl Tree {
++            fn parents(&mut self, p: &Path) {
++                for dir in p.ancestors().skip(1) {
++                    self.entries.entry(dir.to_path_buf()).or_insert(Entry::Dir);
++                }
++            }
++            fn put(&mut self, p: PathBuf, bytes: Vec<u8>) {
++                self.parents(&p);
++                self.entries.insert(p, Entry::File(bytes));
++            }
++            /// `p` and everything below it.
++            fn below(&self, p: &Path) -> Vec<PathBuf> {
++                self.entries.range(p.to_path_buf()..).map(|(k, _)| k).take_while(|k| k.starts_with(p)).cloned().collect()
++            }
++        }
++
++        /// Stores a file without noting a change (files the page brings in from Files or a drop).
++        pub fn put(p: &Path, bytes: Vec<u8>) {
++            with(|t| t.put(key(p), bytes));
++        }
++
++        /// The paths changed since the last call: each now holds what the page's storage should hold, or is gone.
++        pub fn changes() -> Vec<PathBuf> {
++            with(|t| ::std::mem::take(&mut t.changed).into_iter().collect())
++        }
++
++        pub fn exists<P: AsRef<Path>>(p: P) -> bool {
++            TREE.with(|t| t.borrow().entries.contains_key(&key(p.as_ref())))
++        }
++
++        pub fn is_file<P: AsRef<Path>>(p: P) -> bool {
++            TREE.with(|t| matches!(t.borrow().entries.get(&key(p.as_ref())), Some(Entry::File(_))))
++        }
++
++        pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(p: P, bytes: C) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                t.put(p.clone(), bytes.as_ref().to_vec());
++                t.changed.insert(p);
++            });
++            Ok(())
++        }
++
++        pub fn read<P: AsRef<Path>>(p: P) -> io::Result<Vec<u8>> {
++            TREE.with(|t| match t.borrow().entries.get(&key(p.as_ref())) {
++                Some(Entry::File(bytes)) => Ok(bytes.clone()),
++                _ => Err(missing(p.as_ref())),
++            })
++        }
++
++        pub fn read_to_string<P: AsRef<Path>>(p: P) -> io::Result<String> {
++            String::from_utf8(read(p)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
++        }
++
++        pub fn create_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                t.parents(&p);
++                t.entries.entry(p).or_insert(Entry::Dir);
++            });
++            Ok(())
++        }
++
++        pub fn remove_file<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| match t.entries.remove(&p) {
++                Some(Entry::File(_)) => {
++                    t.changed.insert(p);
++                    Ok(())
++                }
++                _ => Err(missing(&p)),
++            })
++        }
++
++        pub fn remove_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                for gone in t.below(&p) {
++                    t.entries.remove(&gone);
++                    t.changed.insert(gone);
++                }
++            });
++            Ok(())
++        }
++
++        pub struct DirEntry(PathBuf);
++        impl DirEntry {
++            pub fn path(&self) -> PathBuf {
++                self.0.clone()
++            }
++        }
++
++        pub fn read_dir<P: AsRef<Path>>(p: P) -> io::Result<::std::vec::IntoIter<io::Result<DirEntry>>> {
++            let dir = key(p.as_ref());
++            if TREE.with(|t| !matches!(t.borrow().entries.get(&dir), Some(Entry::Dir))) {
++                return Err(missing(&dir));
++            }
++            let entries = TREE.with(|t| {
++                t.borrow().below(&dir).into_iter().filter(|k| k.parent() == Some(&dir)).map(|k| Ok(DirEntry(k))).collect::<Vec<_>>()
++            });
++            Ok(entries.into_iter())
++        }
++
++        /// A file's bytes, read whole when it opens; one made by `create` is stored back when flushed or dropped.
++        pub struct File {
++            data: Cursor<Vec<u8>>,
++            /// Where written bytes go, for a file made by `create`.
++            to: Option<PathBuf>,
++            dirty: bool,
++        }
++
++        impl File {
++            pub fn open<P: AsRef<Path>>(p: P) -> io::Result<File> {
++                Ok(File { data: Cursor::new(read(p)?), to: None, dirty: false })
++            }
++            pub fn create<P: AsRef<Path>>(p: P) -> io::Result<File> {
++                write(p.as_ref(), [])?;
++                Ok(File { data: Cursor::new(Vec::new()), to: Some(key(p.as_ref())), dirty: false })
++            }
++            fn store(&mut self) {
++                if let (true, Some(to)) = (self.dirty, &self.to) {
++                    let _ = write(to, self.data.get_ref());
++                    self.dirty = false;
++                }
++            }
++        }
++
++        impl Read for File {
++            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++                self.data.read(buf)
++            }
++        }
++
++        impl Write for File {
++            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++                if self.to.is_none() {
++                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file is open to read"));
++                }
++                self.dirty = true;
++                self.data.write(buf)
++            }
++            fn flush(&mut self) -> io::Result<()> {
++                self.store();
++                Ok(())
++            }
++        }
++
++        impl Drop for File {
++            fn drop(&mut self) {
++                self.store();
++            }
++        }
++    }
++}
++
++/// The temporary folder an imported avatar is staged in (the real crate's `tempdir`, in memory).
++pub mod tempfile {
++    use ::std::cell::Cell;
++    use ::std::path::{Path, PathBuf};
++
++    #[derive(Debug)]
++    pub struct TempDir(PathBuf);
++
++    impl TempDir {
++        pub fn path(&self) -> &Path {
++            &self.0
++        }
++    }
++
++    impl Drop for TempDir {
++        fn drop(&mut self) {
++            let _ = super::std::fs::remove_dir_all(&self.0);
++        }
++    }
++
++    thread_local! {
++        static NEXT: Cell<u32> = const { Cell::new(0) };
++    }
++
++    pub fn tempdir() -> ::std::io::Result<TempDir> {
++        let n = NEXT.replace(NEXT.get() + 1);
++        let dir = PathBuf::from(format!("/tmp/.tmp{n}"));
++        super::std::fs::create_dir_all(&dir)?;
++        Ok(TempDir(dir))
++    }
++}
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..252baa9
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,20 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>ClothCraft</title>
++  <!-- ClothCraft in the browser, for Playground (patches/marvelous-designer.yaml in github.com/daijro/openplayground). -->
++  <link data-trunk rel="rust" href="Cargo.toml" data-bin="cloth-fit" data-wasm-opt="0" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1b1d21; }
++    #clothcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
++    #clothcraft_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #dcdee2; font: 14px system-ui, sans-serif; pointer-events: none; }
++  </style>
++</head>
++<body>
++  <canvas id="clothcraft_canvas"></canvas>
++  <div id="clothcraft_loading">Loading ClothCraft&hellip;</div>
++</body>
++</html>
+diff --git a/src/atelier/web.rs b/src/atelier/web.rs
+new file mode 100644
+index 0000000..206b383
+--- /dev/null
++++ b/src/atelier/web.rs
+@@ -0,0 +1,435 @@
++// SPDX-License-Identifier: MIT
++//! ClothCraft in the browser, for Playground (patches/marvelous-designer.yaml in github.com/daijro/openplayground): the
++//! desktop window on the page's canvas, and its files in Playground's Files.
++//!
++//! `cloth-fit` starts as on the desktop with the T-shirt and the mannequin ([`main`]); atelier.rs takes [`eframe`]
++//! from here on the web, whose `run_native` starts the app on the page. Files live in memory
++//! (clothcraft-playground's `std::fs`): a file from Files comes in at its path (`browser:/Garments/shirt.json` is
++//! `/Garments/shirt.json` here), and whatever ClothCraft writes outside `/tmp` (a saved garment and its `.assets`
++//! folder, an export) goes to Files after the frame. Open, Save and Save As, and the importers' Choose buttons, are
++//! Playground's dialogs ([`rfd`]); "Open in ClothCraft" and a file dropped on the page do what the matching menu item
++//! does with that file.
++use super::*;
++use clothcraft_playground::std::{self, fs};
++use std::cell::{OnceCell, RefCell};
++use std::path::Path;
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++
++/// The mannequin the desktop starts with (`--avatar`), in memory at the path the project names.
++const AVATAR: &str = "/assets/makehuman/mannequin.obj";
++/// Where the Export menu writes (and, with them, the project's files): this folder goes to Files, but the settings,
++/// workspace profiles and recovery snapshots ClothCraft keeps beside the export do not ([`mirrored`]).
++const OUTPUT: &str = "/ClothCraft/Export";
++/// Memory only: files from the computer or a drop, an imported avatar's staging folder, a save to download.
++const TMP: &str = "/tmp";
++const DOWNLOADS: &str = "/tmp/ClothCraft downloads";
++
++/// What a file is for.
++#[derive(Clone, Copy, PartialEq, Debug)]
++enum Kind {
++    Project,
++    Avatar,
++    Dxf,
++    Svg,
++}
++
++impl Kind {
++    fn of(extension: &str) -> Option<Self> {
++        Some(match extension {
++            "json" => Kind::Project,
++            "obj" | "gltf" | "glb" => Kind::Avatar,
++            "dxf" => Kind::Dxf,
++            "svg" => Kind::Svg,
++            _ => return None,
++        })
++    }
++    fn types(self) -> JsValue {
++        let types: &[&str] = match self {
++            Kind::Project => &["json"],
++            Kind::Avatar => &["obj", "gltf", "glb"],
++            Kind::Dxf => &["dxf"],
++            Kind::Svg => &["svg"],
++        };
++        types.iter().map(|t| JsValue::from(*t)).collect::<js_sys::Array>().into()
++    }
++}
++
++/// A dialog the app asked for this frame.
++enum Ask {
++    Open(Kind),
++    Save(String),
++}
++
++thread_local! {
++    static CTX: OnceCell<egui::Context> = const { OnceCell::new() };
++    static ASKED: RefCell<Option<Ask>> = const { RefCell::new(None) };
++    /// Files that came in (an answer to Open, "Open in ClothCraft", a drop), with what they were picked for.
++    static OPENED: RefCell<Vec<(PathBuf, Option<Kind>)>> = const { RefCell::new(Vec::new()) };
++    /// Where Save As… put the garment (and whether it is a download), for the next frame.
++    static SAVED: RefCell<Vec<(PathBuf, bool)>> = const { RefCell::new(Vec::new()) };
++}
++
++fn repaint() {
++    CTX.with(|c| c.get().map(egui::Context::request_repaint));
++}
++
++/// The desktop's eframe, with `run_native` starting the app on the page instead.
++pub(crate) mod eframe {
++    pub use ::eframe::*;
++
++    /// The desktop window's options, which a page has no use for.
++    #[derive(Default)]
++    #[allow(dead_code)]
++    pub struct NativeOptions {
++        pub viewport: egui::ViewportBuilder,
++        pub wgpu_options: egui_wgpu::WgpuConfiguration,
++        pub renderer: Renderer,
++    }
++
++    /// Starts the app on the page's canvas, made by `creator` once the page's context exists; returns at once.
++    pub fn run_native(_name: &str, _options: NativeOptions, creator: super::Creator) -> ::eframe::Result {
++        super::start(creator)
++    }
++}
++
++/// The desktop's file dialogs: on the web they ask Playground's after the frame ([`Web::after`]) and give nothing now.
++pub(crate) mod rfd {
++    use std::path::{Path, PathBuf};
++
++    #[derive(Default)]
++    pub struct FileDialog {
++        extensions: Vec<String>,
++        title: String,
++        name: Option<String>,
++    }
++
++    impl FileDialog {
++        pub fn new() -> Self {
++            Self::default()
++        }
++        pub fn add_filter(mut self, _name: impl Into<String>, extensions: &[impl ToString]) -> Self {
++            self.extensions.extend(extensions.iter().map(ToString::to_string));
++            self
++        }
++        pub fn set_title(mut self, title: impl Into<String>) -> Self {
++            self.title = title.into();
++            self
++        }
++        pub fn set_file_name(mut self, name: impl Into<String>) -> Self {
++            self.name = Some(name.into());
++            self
++        }
++        pub fn set_directory(self, _dir: impl AsRef<Path>) -> Self {
++            self
++        }
++        pub fn pick_file(self) -> Option<PathBuf> {
++            // Not here: the recovery snapshots (there are none on a page), native garment templates and the relink of a
++            // missing avatar.
++            let skipped = ["recovery", "template", "Locate"].iter().any(|s| self.title.contains(s));
++            let kind = self.extensions.first().and_then(|e| super::Kind::of(e));
++            if let (false, Some(kind)) = (skipped, kind) {
++                super::ASKED.set(Some(super::Ask::Open(kind)));
++            }
++            None
++        }
++        pub fn save_file(self) -> Option<PathBuf> {
++            super::ASKED.set(Some(super::Ask::Save(self.name.unwrap_or_else(|| "garment.clothcraft.json".into()))));
++            None
++        }
++    }
++
++    #[derive(Clone, Copy, PartialEq)]
++    pub enum MessageButtons {
++        YesNo,
++        YesNoCancel,
++    }
++
++    #[derive(Clone, Copy, PartialEq, Debug)]
++    pub enum MessageDialogResult {
++        Yes,
++        No,
++        Cancel,
++    }
++
++    pub struct MessageDialog {
++        title: String,
++    }
++
++    impl MessageDialog {
++        pub fn new() -> Self {
++            Self { title: String::new() }
++        }
++        pub fn set_title(mut self, title: impl Into<String>) -> Self {
++            self.title = title.into();
++            self
++        }
++        pub fn set_description(self, _text: impl Into<String>) -> Self {
++            self
++        }
++        pub fn set_buttons(self, _buttons: MessageButtons) -> Self {
++            self
++        }
++        /// The unsaved-changes question, as the browser's own: OK throws the changes away and goes on, Cancel stays (Save
++        /// is in the menu; a page can't wait for a three-way answer).
++        pub fn show(self) -> MessageDialogResult {
++            let text = format!("{}\n\nOK discards the changes and continues. Cancel stays here, to Save first.", self.title);
++            match web_sys::window().and_then(|w| w.confirm_with_message(&text).ok()) {
++                Some(true) => MessageDialogResult::No,
++                _ => MessageDialogResult::Cancel,
++            }
++        }
++    }
++}
++
++fn get(o: &JsValue, k: &str) -> JsValue {
++    js_sys::Reflect::get(o, &k.into()).unwrap_or(JsValue::UNDEFINED)
++}
++
++/// `playgroundFiles[method](...args)`; None when the page has none or it threw.
++fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = Some(get(&js_sys::global(), "playgroundFiles")).filter(JsValue::is_object)?;
++    let f = get(&api, method).dyn_into::<js_sys::Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++async fn wait(v: Option<JsValue>) -> Option<JsValue> {
++    let promise = v?.dyn_into::<js_sys::Promise>().ok()?;
++    wasm_bindgen_futures::JsFuture::from(promise).await.ok().filter(|v| !v.is_null() && !v.is_undefined())
++}
++
++fn options(pairs: &[(&str, JsValue)]) -> JsValue {
++    let o = js_sys::Object::new();
++    for (k, v) in pairs {
++        let _ = js_sys::Reflect::set(&o, &(*k).into(), v);
++    }
++    o.into()
++}
++
++fn extension(path: &Path) -> String {
++    path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase()
++}
++
++/// A file from Files (`{ path, name, bytes }`) into memory at its path (one from the computer goes to `/tmp`), and for
++/// a garment its avatar, from the `.assets` folder beside it.
++async fn bring_in(file: JsValue) -> Option<PathBuf> {
++    let name = get(&file, "name").as_string()?;
++    let from = get(&file, "path").as_string().and_then(|p| p.strip_prefix("browser:").map(PathBuf::from));
++    let file_name = Path::new(&name).file_name()?;
++    let path = from.clone().unwrap_or_else(|| Path::new(TMP).join(file_name));
++    let bytes = js_sys::Uint8Array::new(&get(&file, "bytes")).to_vec();
++    if let (Some(from), "json") = (&from, extension(&path).as_str()) {
++        let avatar = serde_json::from_slice::<serde_json::Value>(&bytes).ok().and_then(|j| j["avatar_path"].as_str().map(PathBuf::from));
++        if let (Some(avatar), Some(dir)) = (avatar.filter(|a| a.is_relative()), from.parent()) {
++            let target = dir.join(&avatar);
++            let read = call("read", &[format!("browser:{}", target.display()).into()]);
++            if let Some(avatar) = wait(read).await {
++                fs::put(&target, js_sys::Uint8Array::new(&avatar).to_vec());
++            }
++        }
++    }
++    fs::put(&path, bytes);
++    Some(path)
++}
++
++fn opened(file: JsValue, kind: Option<Kind>) {
++    wasm_bindgen_futures::spawn_local(async move {
++        if let Some(path) = bring_in(file).await {
++            OPENED.with_borrow_mut(|o| o.push((path, kind)));
++            repaint();
++        }
++    });
++}
++
++/// Whether a changed file belongs in Files: the export and the garments, not the settings ClothCraft keeps beside the
++/// export.
++fn mirrored(p: &Path) -> bool {
++    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
++    !p.starts_with(TMP) && !name.starts_with("recovery-") && !["preferences.json", "presentation.json", "workspace-profiles.json"].contains(&name)
++}
++
++/// The page's app: the window, then what it asked of the page.
++pub(crate) struct Web {
++    app: Atelier,
++    unsaved: bool,
++}
++
++impl Web {
++    /// After the window's frame: files that came in, the dialogs it asked for, and what it wrote.
++    fn after(&mut self, ctx: &egui::Context) {
++        for (path, kind) in OPENED.take() {
++            // A dialog's answer comes after the importer or the unsaved-changes question the menu item began with;
++            // a file from Files' "Open in" or a drop begins it here.
++            let asked = kind.is_some();
++            let Some(kind) = kind.or_else(|| Kind::of(&extension(&path))) else {
++                self.app.status = format!("{} is not a garment, an avatar or a pattern outline", path.display());
++                continue;
++            };
++            let app = &mut self.app;
++            match kind {
++                Kind::Project => {
++                    if !asked && !app.can_replace_document(ctx) {
++                        continue;
++                    }
++                    app.open_document_path(path.clone(), false);
++                    // A file from the computer has no place in Files: Save asks where.
++                    if path.starts_with(TMP) {
++                        app.document.path = None;
++                    }
++                }
++                Kind::Avatar => {
++                    if !asked {
++                        app.open_avatar_import(ctx);
++                    }
++                    app.document.avatar_import.choose(&path);
++                }
++                Kind::Dxf => {
++                    if !asked {
++                        app.open_pattern_import();
++                    }
++                    app.document.pattern_import.choose(&path);
++                }
++                Kind::Svg => {
++                    if !asked {
++                        app.open_svg_import();
++                    }
++                    app.document.svg_import.choose(&path);
++                }
++            }
++        }
++        for (path, download) in SAVED.take() {
++            self.app.document.path = Some(path);
++            // "Download to device": written in memory first, then handed to the browser (below); the next Save asks again.
++            if self.app.save_document(ctx, false) && download {
++                self.app.document.path = None;
++            }
++        }
++        match ASKED.take() {
++            Some(Ask::Open(kind)) => {
++                let asked = call("open", &[options(&[("types", kind.types())])]);
++                wasm_bindgen_futures::spawn_local(async move {
++                    if let Some(file) = wait(asked).await.and_then(|p| js_sys::Array::from(&p).iter().next()) {
++                        opened(file, Some(kind));
++                    }
++                });
++            }
++            Some(Ask::Save(name)) => {
++                let asked = call("saveAs", &[options(&[("name", name.as_str().into()), ("types", Kind::Project.types())])]);
++                wasm_bindgen_futures::spawn_local(async move {
++                    let Some(answer) = wait(asked).await else { return };
++                    let (path, download) = match get(&answer, "path").as_string() {
++                        Some(p) => (p.strip_prefix("browser:").map(PathBuf::from), false),
++                        None => (Some(Path::new(DOWNLOADS).join(&name)), true),
++                    };
++                    if let Some(mut path) = path {
++                        if path.extension().is_none() {
++                            path.set_extension("json");
++                        }
++                        SAVED.with_borrow_mut(|s| s.push((path, download)));
++                        repaint();
++                    }
++                });
++            }
++            None => {}
++        }
++        for p in fs::changes() {
++            if p.starts_with(DOWNLOADS) {
++                if let (Ok(bytes), Some(name)) = (fs::read(&p), p.file_name()) {
++                    call("download", &[name.to_string_lossy().as_ref().into(), js_sys::Uint8Array::from(bytes.as_slice()).into()]);
++                    let _ = fs::remove_file(&p);
++                    fs::changes();
++                }
++            } else if mirrored(&p) {
++                let target = JsValue::from(format!("browser:{}", p.display()));
++                if fs::is_file(&p) {
++                    call("write", &[target, js_sys::Uint8Array::from(fs::read(&p).unwrap_or_default().as_slice()).into()]);
++                } else if !fs::exists(&p) {
++                    call("remove", &[target]);
++                }
++            }
++        }
++        if self.unsaved != self.app.document.dirty {
++            self.unsaved = self.app.document.dirty;
++            call("setUnsaved", &[self.unsaved.into()]);
++        }
++    }
++}
++
++impl ::eframe::App for Web {
++    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
++        ::eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
++        // A dropped file is only a name on the web: its bytes are read, then it is handled as "Open in ClothCraft" is.
++        for f in std::mem::take(&mut raw_input.dropped_files) {
++            wasm_bindgen_futures::spawn_local(async move {
++                if let (Ok(bytes), Some(name)) = (f.bytes_async().await, f.path().file_name()) {
++                    let path = Path::new(TMP).join("ClothCraft dropped").join(name);
++                    fs::put(&path, bytes);
++                    OPENED.with_borrow_mut(|o| o.push((path, None)));
++                    repaint();
++                }
++            });
++        }
++    }
++
++    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut ::eframe::Frame) {
++        // The simulation's turn on the page's one thread (see worker_web.rs), before the frame reads its result.
++        super::super::worker::pump();
++        ::eframe::App::ui(&mut self.app, ui, frame);
++        self.after(ui.ctx());
++        // A link opens in a new tab, as the desktop opens the browser, rather than replacing the app.
++        ui.ctx().output_mut(|o| {
++            for command in &mut o.commands {
++                if let egui::OutputCommand::OpenUrl(url) = command {
++                    url.new_tab = true;
++                }
++            }
++        });
++    }
++}
++
++/// The desktop's app creator, as atelier.rs's `run` hands it over (a `Box<Atelier>`, not eframe's `dyn App`).
++pub(crate) type Creator = Box<dyn FnOnce(&::eframe::CreationContext<'_>) -> Result<Box<Atelier>, DynError>>;
++type DynError = Box<dyn std::error::Error + Send + Sync>;
++
++/// [`eframe::run_native`] on the web: the app is made by the desktop's creator against the page's context, so the
++/// services it starts wake the page.
++fn start(creator: Creator) -> ::eframe::Result {
++    call("onOpen", &[Closure::<dyn Fn(JsValue)>::new(|file| opened(file, None)).into_js_value()]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
++        let canvas = document
++            .get_element_by_id("clothcraft_canvas")
++            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
++            .expect("no #clothcraft_canvas");
++        let creator = move |cc: &::eframe::CreationContext<'_>| -> Result<Box<dyn ::eframe::App>, DynError> {
++            CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
++            let mut app = *creator(cc)?;
++            // The T-shirt it starts with is nobody's work yet (the desktop has it unsaved, which would ask before an
++            // "Open in ClothCraft" replaced it, and before the page was left).
++            app.document.dirty = false;
++            Ok(Box::new(Web { app, unsaved: false }))
++        };
++        let runner = ::eframe::WebRunner::new();
++        let started = runner.start(canvas, ::eframe::WebOptions::default(), Box::new(creator)).await;
++        // The runner lives as long as the page.
++        std::mem::forget(runner);
++        if let Some(loading) = document.get_element_by_id("clothcraft_loading") {
++            match started {
++                Ok(()) => loading.remove(),
++                Err(e) => loading.set_text_content(Some(&format!("ClothCraft could not start: {e:?}"))),
++            }
++        }
++    });
++    Ok(())
++}
++
++/// `cloth-fit --steps 0 --view` on the page: the T-shirt on the mannequin, in the editor.
++pub fn main() {
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("ClothCraft: {info}").into())));
++    fs::put(Path::new(AVATAR), include_bytes!("../../assets/makehuman/mannequin.obj").to_vec());
++    let project = FittingProject::basic(GarmentKind::Tshirt, 2, PathBuf::from(AVATAR));
++    let scene = project.compile().expect("the T-shirt does not compile");
++    let files = super::super::DocumentFiles { output: PathBuf::from(OUTPUT), source: None, modified: false };
++    if let Err(e) = super::super::run(project, scene, files, false, false, false, false) {
++        web_sys::console::error_1(&format!("ClothCraft: {e}").into());
++    }
++}
+diff --git a/src/atelier/worker_web.rs b/src/atelier/worker_web.rs
+new file mode 100644
+index 0000000..c9702cd
+--- /dev/null
++++ b/src/atelier/worker_web.rs
+@@ -0,0 +1,115 @@
++// SPDX-License-Identifier: MIT
++//! The simulation worker in Playground's browser build (patches/marvelous-designer.yaml in github.com/daijro/openplayground),
++//! without its thread: a page has one. `start` makes the same channel and result slot, and [`pump`] (the page calls it
++//! before every frame) is one turn of the thread's loop, run in place: the work sent since the last frame is taken, and
++//! if a step is due it is solved on the page's one thread (Rayon runs there too) and published for the frame. Steps
++//! use the CPU solver: the GPU one reads its results back with a blocking `device.poll`, which a page can't do, and
++//! WebGL2 has no compute shaders at all.
++use super::*;
++use clothcraft_playground::std::{self, cell::RefCell};
++
++struct Pump {
++    rx: mpsc::Receiver<Work>,
++    output: Latest,
++    cache: Option<(u64, VbdSolver)>,
++    active: Option<Work>,
++    deadline: Instant,
++}
++
++thread_local! {
++    static PUMP: RefCell<Option<Pump>> = const { RefCell::new(None) };
++}
++
++pub(crate) fn start(
++    _device: wgpu::Device,
++    _queue: wgpu::Queue,
++) -> Result<(mpsc::Sender<Work>, Latest), std::io::Error> {
++    let (tx, rx) = mpsc::channel::<Work>();
++    let latest: Latest = Arc::new(Mutex::new(None));
++    PUMP.set(Some(Pump {
++        rx,
++        output: latest.clone(),
++        cache: None,
++        active: None,
++        deadline: Instant::now(),
++    }));
++    Ok((tx, latest))
++}
++
++/// One turn of the worker's loop: take the work sent, and solve a step if one is due.
++pub(crate) fn pump() {
++    PUMP.with_borrow_mut(|pump| {
++        if let Some(pump) = pump {
++            pump.turn();
++        }
++    });
++}
++
++impl Pump {
++    fn turn(&mut self) {
++        while let Ok(w) = self.rx.try_recv() {
++            accept(&mut self.active, w, &mut self.deadline);
++        }
++        let Some(w) = &mut self.active else { return };
++        if !w.once && (!w.playing || Instant::now() < self.deadline) {
++            return;
++        }
++        let request = take_final_diagnostics_request(w.generation);
++        if request.is_some() {
++            clear_final_diagnostics();
++        }
++        let previous = request.map(|_| w.scene.state.clone());
++        w.once = false;
++        let cache = &mut self.cache;
++        let result: Result<(State, VbdMetrics), String> = (|| {
++            if cache.as_ref().is_none_or(|(g, _)| *g != w.generation) {
++                *cache = Some((
++                    w.generation,
++                    VbdSolver::new(
++                        w.scene.garment.clone(),
++                        Some(&w.scene.collider.surface),
++                        &w.scene.state,
++                    )?,
++                ));
++                clear_final_diagnostics();
++            }
++            let solver = &mut cache.as_mut().unwrap().1;
++            let metrics = solver.step(&mut w.scene.state, &w.settings, w.grab.as_ref())?;
++            if let (Some(request), Some(previous)) = (request, previous) {
++                match solver.sample_final_diagnostics(
++                    &previous,
++                    &w.scene.state,
++                    &w.settings,
++                    w.grab.as_ref(),
++                    FinalDiagnosticsBackend::Cpu,
++                ) {
++                    Ok(sample) => {
++                        *FINAL_DIAGNOSTICS.lock().unwrap() = Some(FinalDiagnosticsResult { request, sample });
++                        *FINAL_DIAGNOSTICS_ERROR.lock().unwrap() = None;
++                    }
++                    Err(message) => {
++                        *FINAL_DIAGNOSTICS.lock().unwrap() = None;
++                        *FINAL_DIAGNOSTICS_ERROR.lock().unwrap() = Some(FinalDiagnosticsFailure { request, message });
++                    }
++                }
++            }
++            Ok((w.scene.state.clone(), metrics))
++        })();
++        if let Err(error) = &result {
++            if let Some(request) = request {
++                *FINAL_DIAGNOSTICS.lock().unwrap() = None;
++                *FINAL_DIAGNOSTICS_ERROR.lock().unwrap() =
++                    Some(FinalDiagnosticsFailure { request, message: error.clone() });
++            }
++            w.playing = false;
++        }
++        let mut slot = self.output.lock().unwrap();
++        let had_grab = w.grab.is_some()
++            || slot.as_ref().is_some_and(|d| d.generation == w.generation && d.had_grab);
++        *slot = Some(Done { generation: w.generation, had_grab, result });
++        drop(slot);
++        w.ctx.request_repaint();
++        let dt = Duration::from_secs_f64(w.settings.dt);
++        self.deadline = (self.deadline + dt).max(Instant::now() - dt * 4);
++    }
++}

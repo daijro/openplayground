@@ -508,6 +508,25 @@ groups:
         accent: "#7A4ED6"
         base: "#1C0E3A"
 
+      - slug: marvelous-designer
+        name: ClothCraft
+        alternative: Marvelous Designer
+        blurb: Draw garment patterns, sew them and drape them on an avatar with a cloth simulation.
+        # Saved garments (.json, with their .assets folder), static avatars, and DXF and SVG pattern outlines import. Upstream
+        # has no releases, so like EarthCraft it has the head channel only; patches/marvelous-designer.yaml adds the
+        # web build.
+        opens: []
+        imports: [json, obj, gltf, glb, dxf, svg]
+        repo: erythrofr/ClothCraft
+        license: MIT
+        copyright: "Copyright (c) 2026 erythrofr and ClothCraft contributors"
+        # What the web build compiles: docs, coordination and test commits don't rebuild it.
+        paths: [src, assets, examples, Cargo.toml, Cargo.lock]
+        patches: patches/marvelous-designer.yaml
+        icon: icons/clothcraft.png
+        accent: "#039299"
+        base: "#06302D"
+
   - name: Music
     tools:
       - slug: pro-tools
