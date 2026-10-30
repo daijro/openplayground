@@ -40,13 +40,13 @@
 # `build.mjs check` compiles for wasm32-unknown-unknown, which this build doesn't use: there LAME's configure has no C
 # library and fails. Build with `node scripts/build.mjs build audition head` to try the patches.
 
-# Rule 1/13: the players' page audio (apps/altered-web/playground), on wasm only. If upstream adds a wasm32 table of its
+# Rule 1/17: the players' page audio (apps/altered-web/playground), on wasm only. If upstream adds a wasm32 table of its
 # own, this one stays separate (cargo merges them).
 - file: src-tauri/Cargo.toml
   find: '(?![\s\S])'
   after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\naltered-playground = { path = \"../apps/altered-web/playground\" }\n"
 
-# Rules 2-8/13: playback, file preview and recording without threads. Each player's `run` (its thread: open the
+# Rules 2-8/17: playback, file preview and recording without threads. Each player's `run` (its thread: open the
 # device, start the render, decode or disk work, wait until stopped) is left out on wasm for web.rs's, which sets up
 # the same way and returns; `std` comes from altered-playground, so the `thread::Builder::spawn` that starts `run` runs
 # it at once and the caller's wait for "ready" is already answered. If upstream renames `run` or splits it, follow it
@@ -76,7 +76,7 @@
   find: '^[ \t]*match first_err \{'
   before: "        #[cfg(target_arch = \"wasm32\")]\n        web::finish(&mut takes, &mut first_err);\n"
 
-# Rules 9-11/13: where things go in Files. An unsaved session's takes go to /Recordings, not the cache (which lives only
+# Rules 9-11/17: where things go in Files. An unsaved session's takes go to /Recordings, not the cache (which lives only
 # as long as the page); new sessions start at the top of Files, each in its own folder; libraries go in /Libraries.
 - file: src-tauri/src/commands/record.rs
   find: '^[ \t]*None => Ok\(crate::commands::cache::cache_root\(app\)\?\.join\("recordings"\)\),'
@@ -88,10 +88,28 @@
   find: 'pub fn library_default_root\([^)]*\)[^{]*\{'
   after: "\n    // Playground's browser build: in Files (patches/audition.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    return Ok(PathBuf::from(\"/Libraries\"));"
 
-# Rules 12-13/13: Help > About shows Retake's logo and says what it is based on (build-web.sh renames the rest).
+# Rules 12-13/17: Help > About shows Retake's logo and says what it is based on (build-web.sh renames the rest).
 - file: src/app/AboutDialog.svelte
   find: 'import logo from "[^"]*";'
   replace: 'import logo from "../../apps/altered-web/logo.svg";'
 - file: src/app/AboutDialog.svelte
   find: '<p class="version">.*</p>'
   after: "\n    <p>Based on Altered Audio Editor by The GeekCast Radio Network, built for the browser by Playground.</p>"
+
+# Rules 14-17/17: free disk space (Settings > recording folder) asks fs4, whose file locking has no WASI side (it doesn't
+# compile for the browser build's target); a page has no drive to ask, so the answer is "unknown" there. Rules 14-15 move
+# the dependency's line into a table for native targets, rule 16 skips the call. Rule 17: the settings backup that launch starts on a
+# thread of its own, which WASI cannot start (it panics), and a page keeps its settings in memory anyway. If upstream stops
+# using fs4 here or backs up another way, drop these.
+- file: src-tauri/Cargo.toml
+  find: '^fs4 = [^\n]*\n'
+  replace: ''
+- file: src-tauri/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\nfs4 = { version = \"0.13\", default-features = false, features = [\"sync\"] }\n"
+- file: src-tauri/src/commands/app.rs
+  find: 'fs4::available_space\(&dir\)\.ok\(\)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    let space = fs4::available_space(&dir).ok();\n    #[cfg(target_arch = \"wasm32\")]\n    let space = None;\n    space"
+- file: src-tauri/src/lib.rs
+  find: 'std::thread::spawn\(move \|\| backup::on_launch\(&config, &backups, &version\)\);'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n                    $&"

@@ -19,6 +19,9 @@
 # Native builds see none of this: every rule adds or keeps wasm-only lines.
 #
 # Verify: node scripts/build.mjs check transit head (and LIVE=0), then the e2e (tests/live-apps/transit.mjs).
+#
+# Upstream removed its web app (and the wasm32 gates below) on 2026-10-28, in transit#177: tools.yaml pins the head channel to the
+# last commit before it, 265cd59, and these rules apply to that commit only.
 
 # Rules 1-2/30: the Player's MIDI on the web. The MIDI Monitor's ring types (monitor.rs, plain std) compile on wasm as
 # they are, so its module loses its native-only gate (a no-op natively); midi_out's types and MidiStatus come from

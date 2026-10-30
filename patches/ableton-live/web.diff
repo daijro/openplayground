@@ -76,7 +76,7 @@ new file mode 100644
 index 0000000..bc98228
 --- /dev/null
 +++ b/apps/suhina-web/src/audio.rs
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,148 @@
 +//! The browser's audio output: the engine renders inside the page's WebAudio callback (cpal's `webaudio` host), on
 +//! the one thread a page has. The desktop output (crates/output) renders ahead on a real-time thread of its own,
 +//! which a browser without shared memory cannot start.
@@ -86,8 +86,8 @@ index 0000000..bc98228
 +
 +use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 +use suhina_engine::model::Project;
-+use suhina_engine::{AudioPool, DeviceAssets, Plugins, Renderer};
-+use suhina_session::Player;
++use suhina_engine::{AudioPool, DeviceAssets, Plugins, RenderInputs, RenderOptions, Renderer};
++use suhina_session::{OutputHandle, Player};
 +use suhina_session::audio::{AudioSystem, DeviceInfo, HostInfo, LiveOutput, Opened, OutputChoice, OutputInfo};
 +
 +/// Frames per WebAudio buffer: two are queued, so about 85 ms at 48 kHz. Shorter ones break up while the page draws.
@@ -142,6 +142,13 @@ index 0000000..bc98228
 +/// What keeps a player's stream playing: dropping it stops the stream.
 +struct Keep(#[allow(dead_code)] Arc<cpal::Stream>);
 +
++impl OutputHandle for Keep {
++    /// Closing drops the stream; no plug-ins run here to hand back.
++    fn close(self: Box<Self>) -> Option<(u32, Plugins)> {
++        None
++    }
++}
++
 +#[derive(Default)]
 +pub struct WebOutput;
 +
@@ -177,8 +184,8 @@ index 0000000..bc98228
 +        let host = cpal::default_host();
 +        let device = host.default_output_device().ok_or("this browser has no audio output")?;
 +        let sample_rate = device.default_output_config().map(|c| c.sample_rate()).unwrap_or(48_000);
-+        let mut renderer = Renderer::stopped_with_assets(project, audio, assets, sample_rate, Plugins::new())
-+            .map_err(|e| e.to_string())?;
++        let inputs = RenderInputs::from_audio(audio).with_assets(assets);
++        let mut renderer = Renderer::build(project, inputs, sample_rate, RenderOptions::STOPPED).map_err(|e| e.to_string())?;
 +        // No stretch worker thread: the renderer stretches clips itself, as an offline render does.
 +        let controller = renderer.controller();
 +        let progress = Arc::new(Progress::default());
@@ -439,7 +446,7 @@ index 0000000..edb1009
 +    fn open(&mut self, path: &Path, how: OpenAs) {
 +        match Session::open(path) {
 +            Ok((session, warnings)) => self.show_session(session, warnings, how),
-+            Err(e) => self.app.set_status(Status::Error(e.0)),
++            Err(e) => self.app.set_status(Status::Error(String::from(e))),
 +        }
 +    }
 +
@@ -477,12 +484,12 @@ index 0000000..edb1009
 +        }
 +        if let Some(new) = self.app.take_new_request() {
 +            let made = match new {
-+                NewProject::Blank => Ok((Session::new(suhina_session::blank_project()), Vec::new())),
++                NewProject::Blank { returns } => Ok((Session::new(suhina_session::blank_project_with(returns)), Vec::new())),
 +                NewProject::Template(path) => Session::from_template(&path),
 +            };
 +            match made {
 +                Ok((session, warnings)) => self.show_session(session, warnings, OpenAs::NewTab),
-+                Err(e) => self.app.set_status(Status::Error(e.0)),
++                Err(e) => self.app.set_status(Status::Error(String::from(e))),
 +            }
 +        }
 +        let _ = self.app.take_recovery_request();
@@ -611,7 +618,7 @@ new file mode 100644
 index 0000000..5217e7a
 --- /dev/null
 +++ b/crates/playground/src/lib.rs
-@@ -0,0 +1,615 @@
+@@ -0,0 +1,624 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +//! Suhina in the browser, for Playground (patches/ableton-live.yaml in github.com/daijro/openplayground).
 +//!
@@ -999,6 +1006,15 @@ index 0000000..5217e7a
 +                Ok(())
 +            }
 +            pub fn sync_data(&self) -> io::Result<()> {
++                Ok(())
++            }
++            /// Truncates or zero-extends the file (the sample cache drops a torn tail through this).
++            pub fn set_len(&self, size: u64) -> io::Result<()> {
++                if let Some(to) = &self.to {
++                    let mut bytes = self.data.get_ref().clone();
++                    bytes.resize(size as usize, 0);
++                    write(to, bytes)?;
++                }
 +                Ok(())
 +            }
 +            fn store(&mut self) {

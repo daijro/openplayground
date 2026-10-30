@@ -677,9 +677,11 @@ groups:
         license: MIT OR Apache-2.0
         # Its LICENSE-MIT and NOTICE carry SoundCraft's line: transit is based on SoundCraft by storytold.
         copyright: "Copyright (c) 2026 ArtCraft Team and the SoundCraft contributors"
-        # What the web build compiles (Cargo.lock: dependency changes): docs, site, CI and packaging commits don't
-        # rebuild it. One GitHub API request per path per check.
-        paths: [apps/soundcraft-web, crates, assets, Cargo.toml, Cargo.lock]
+        # Upstream removed its web app on 2026-10-28 (transit-audio/transit#177: "Remove the web app and the legacy egui UI
+        # crate"; it is a desktop app now), and with it every wasm32 gate the patches build on. The head channel stays at the
+        # last commit before that. A newer Transit in the browser means porting it again (patches/transit.yaml, from the
+        # desktop crates); delete `commit:` then.
+        commit: 265cd597f4b5928ef6a9f23ba2958c543e4ada88
         patches: patches/transit.yaml
         live_kit: true
         icon: icons/transit.svg

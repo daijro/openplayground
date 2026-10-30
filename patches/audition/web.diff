@@ -2152,7 +2152,7 @@ new file mode 100644
 index 0000000..ce044b8
 --- /dev/null
 +++ b/apps/altered-web/stand-ins/tauri/src/lib.rs
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,342 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +//! Tauri 2 as Altered Audio Editor's back end uses it, for Playground's browser build (patches/audition.yaml in
 +//! github.com/daijro/openplayground). The back end compiles unchanged against it: `Builder::run` keeps the command
@@ -2300,7 +2300,27 @@ index 0000000..ce044b8
 +
 +impl Manager for AppHandle {}
 +
++/// What `package_info()` answers: the settings backup (commands/backup.rs) tags its snapshots with the app's version, and the
++/// page keeps them for the page's session only, so one name for every build will do.
++pub struct PackageInfo {
++    pub version: Version,
++}
++pub struct Version(pub &'static str);
++impl std::fmt::Display for Version {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str(self.0)
++    }
++}
++static PACKAGE_INFO: PackageInfo = PackageInfo { version: Version("web") };
++
 +impl AppHandle {
++    /// `App::handle` (an App is an AppHandle here).
++    pub fn handle(&self) -> &AppHandle {
++        self
++    }
++    pub fn package_info(&self) -> &PackageInfo {
++        &PACKAGE_INFO
++    }
 +    /// File > Exit: the page goes back to Playground.
 +    pub fn exit(&self, code: i32) {
 +        __private::host("exit", &serde_json::Value::from(code));
@@ -2667,7 +2687,7 @@ index 0000000..6efc924
 +    let mut tap = LiveTap::new(&targets, channels);
 +
 +    // Input monitoring: the monitored targets' mix through the page's audio.
-+    let mix = MonitorMix::new(&targets, channels);
++    let mut mix = MonitorMix::new(&targets, channels, rate);
 +    let mut monitor = mix.as_ref().map(|_| {
 +        let (p, mut c) = RingBuffer::<f32>::new(rate as usize * 2);
 +        let s = shared.clone();
@@ -2699,7 +2719,7 @@ index 0000000..6efc924
 +        if let Ok(mut live) = shared.live.lock() {
 +            tap.push(block, &mut live);
 +        }
-+        if let (Some(m), Some(p)) = (mix.as_ref(), monitor.as_mut()) {
++        if let (Some(m), Some(p)) = (mix.as_mut(), monitor.as_mut()) {
 +            mixed.clear();
 +            m.mix(block, &mut mixed);
 +            let queued = p.buffer().capacity() - p.slots();

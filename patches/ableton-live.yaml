@@ -21,14 +21,14 @@
 # threads), the browser panel's folder index and the sample map (never started). Native builds see none of this:
 # every rule adds wasm-only lines, or a wasm-only early return.
 
-# Rule 1/77: the web build's own profile (apps/suhina-web/index.html names it): release with whole-program
+# Rule 1/92: the web build's own profile (apps/suhina-web/index.html names it): release with whole-program
 # optimisation, as NoteCraft's and the ArtCraft web profiles have. A table of its own, so upstream's [profile.release]
 # stays as it is. If upstream adds a profile of this name, rename it here and in index.html.
 - file: Cargo.toml
   find: '(?![\s\S])'
   after: "\n# Playground's web build (patches/ableton-live.yaml): release with whole-program optimisation.\n[profile.playground-web]\ninherits = \"release\"\nlto = \"fat\"\ncodegen-units = 1\n"
 
-# Rules 2-3/77: the plug-in hosts' sockets. `interprocess` has no wasm side: on wasm crates/plugins takes the
+# Rules 2-3/92: the plug-in hosts' sockets. `interprocess` has no wasm side: on wasm crates/plugins takes the
 # never-connecting stand-in crates/playground has under that name (starting a plug-in host fails with a message, and
 # the project plays without it). The first rule moves the crate's line into a native-only table at the end; if
 # upstream drops or renames the dependency, drop both rules.
@@ -39,7 +39,7 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: no plug-in hosts there (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::interprocess;\n"
 
-# Rules 4-17/77: crates/playground as a wasm-only dependency of each crate whose modules take its std (crates/plugins
+# Rules 4-17/92: crates/playground as a wasm-only dependency of each crate whose modules take its std (crates/plugins
 # has it from the rules above), under a target spelling nobody else uses (`all(...)`), so it never meets a table of
 # upstream's. A crate upstream adds that needs the clock or files gets one more such rule.
 - file: crates/als/Cargo.toml
@@ -82,7 +82,7 @@
   find: '(?![\s\S])'
   after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\nsuhina-playground = { path = \"../../crates/playground\" }\n"
 
-# Rules 18-70/77: the modules that use the clock, files or threads (Instant::now, SystemTime::now, std::fs,
+# Rules 18-70/92: the modules that use the clock, files or threads (Instant::now, SystemTime::now, std::fs,
 # thread::scope / sleep, process::id) take `std` from crates/playground on wasm through ONE `use` line at their end
 # (see the top). Found with: every non-test module of the crates the web build compiles that names Instant,
 # SystemTime, fs::, File::, OpenOptions or thread::scope/sleep (crates/ipc's mmap'd regions and the recording thread's
@@ -245,7 +245,7 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
 
-# Rules 71-72/77: backups name their times through chrono, which takes std's SystemTime: those two functions get it
+# Rules 71-72/92: backups name their times through chrono, which takes std's SystemTime: those two functions get it
 # from the page's (no backups are written in the browser, but backup.rs's clock must be the page's: every Session
 # makes a backup state at once). If upstream renames them, follow.
 - file: crates/session/src/backup.rs
@@ -255,7 +255,7 @@
   find: '\bfn\s+clock_time\s*\(\s*written\s*:\s*SystemTime\s*\)\s*->\s*String\s*\{'
   after: "\n    #[cfg(target_arch = \"wasm32\")] let written = suhina_playground::std_time(written);"
 
-# Rules 73-77/77: files in memory where a call asks the real file system (Path::is_file, canonicalize): the project's
+# Rules 73-77/92: files in memory where a call asks the real file system (Path::is_file, canonicalize): the project's
 # audio is found (`locate`, inside the project's folder, no links, answered by crates/playground) and decoded,
 # samples and Stems files added to a project are found, and a decoded file still in its place is not offered as
 # missing. If upstream changes: follow `locate`'s signature; anchor the others on the new spelling of the check.
@@ -274,6 +274,70 @@
 - file: crates/session/src/relink.rs
   find: '!loaded\s*\|\|\s*!missing\.last_path\.is_file\(\)'
   replace: '!loaded || !std::fs::metadata(&missing.last_path).is_ok_and(|m| m.is_file())'
+
+# Rules 83-84/92: two session modules that keep clock times which cross into modules already on the browser's clock (the
+# export's plug-in state deadline, a device file's modified time): same one `use` line.
+- file: crates/session/src/export.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/session/src/device_files.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock and files (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+
+# Rules 85-86/92: the frame trace (a timer started every frame, crates/ui/src/kit/frame_trace.rs) and the plug-in trace it
+# reads (crates/plugins/src/trace.rs) read the clock: the browser's, through the same one `use` line. Without it the page
+# panics on its first frame ("time not implemented on this platform").
+- file: crates/ui/src/kit/frame_trace.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/plugins/src/trace.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+
+# Rules 91-92/92: the session's player (every project update is timed) and the hosted plug-ins' round trips read the clock:
+# the browser's, through the same one `use` line. (Not its take writer: recording is off here, and it passes real files on.)
+- file: crates/session/src/player.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/session/src/rack/hosted.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+
+# Rules 87-90/92: the UI modules that read the clock (an export's deadline, the MIDI port list's age, a missing-files temp name,
+# the sample map's timers): the browser's, through the same one `use` line.
+- file: crates/ui/src/app/exports.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/ui/src/app/audio_settings.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/ui/src/app/missing_files.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/ui/src/browser/sample_map.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+
+# Rules 78-82/92: Ogg Vorbis and MP3 export. Their encoders are C code with no browser side (libvorbis through vorbis_rs,
+# whose errno crate doesn't build for wasm32-unknown-unknown; LAME, which has no libc headers there). Rules 78-79 move
+# vorbis_rs into a table for native targets; rule 80 gives the browser an Ogg writer that says so; rule 81 skips compiling
+# LAME on wasm and rule 82 gives the browser an MP3 writer that says so, so nothing refers to the C code (WAV and FLAC
+# export work as before). If upstream drops these exports or swaps the encoders for pure-Rust ones, drop the rules.
+- file: crates/media/Cargo.toml
+  find: '^vorbis_rs = [^\n]*\n'
+  replace: ''
+- file: crates/media/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\nvorbis_rs = { version = \"0.5\", default-features = false }\n"
+- file: crates/media/src/write.rs
+  find: '^fn write_ogg\('
+  replace: "#[cfg(target_arch = \"wasm32\")]\nfn write_ogg(_path: &Path, _samples: &[f32], _spec: &AudioFileSpec) -> Result<(), String> {\n    Err(\"Ogg Vorbis export is not available in the browser (it needs libvorbis, C code): choose WAV or FLAC.\".into())\n}\n#[cfg(not(target_arch = \"wasm32\"))]\nfn write_ogg("
+- file: crates/mp3/build.rs
+  find: '^fn main\(\) \{'
+  after: "\n    // Playground's browser build: no C compiler for wasm here (patches/ableton-live.yaml).\n    if std::env::var(\"CARGO_CFG_TARGET_ARCH\").as_deref() == Ok(\"wasm32\") {\n        return;\n    }"
+- file: crates/media/src/write.rs
+  find: '^fn write_mp3\('
+  replace: "#[cfg(target_arch = \"wasm32\")]\nfn write_mp3(_path: &Path, _samples: &[f32], _spec: &AudioFileSpec) -> Result<(), String> {\n    Err(\"MP3 export is not available in the browser (its encoder is C code): choose WAV or FLAC.\".into())\n}\n#[cfg(not(target_arch = \"wasm32\"))]\nfn write_mp3("
 
 # Live editing in Playground sessions (patches/ableton-live/live.diff + the playground-live crate, tools.yaml live_kit)
 # What it's for: people in a Playground session work on the same project at once: clips and their notes, audio clip
@@ -334,21 +398,21 @@
 - live: true
   file: crates/ui/src/session/session_view.rs
   find: 'draw_column\(ui,\s*&painter,\s*&bands,\s*clip,\s*span,\s*column,\s*track_number,\s*progress,\s*state,\s*actions\);'
-  after: "\n        #[cfg(target_arch = \"wasm32\")] crate::app::live::column(column.track, span, bands.top, PITCH, bands.body, bands.mixer);"
+  after: "\n        #[cfg(target_arch = \"wasm32\")] crate::app::live::column(column.track, span, bands.top, slot_pitch(), bands.body, bands.mixer);"
 - live: true
   file: crates/ui/src/arrangement/arrangement_view.rs
   find: 'let\s+lane_at\s*=\s*\|pos:\s*Pos2\|[^;]*;'
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::lanes(rows.iter().map(|r| (r.track, r.time, r.clip)), time.left() - scroll_x, beat_width);"
 - live: true
-  file: crates/ui/src/arrangement/arrangement_view.rs
+  file: crates/ui/src/arrangement/arrangement_view/clip.rs
   find: '\bfn\s+paint_clip\s*\([\s\S]*?\)\s*\{'
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::clip_shown(clip.id, rect);"
 - live: true
-  file: crates/ui/src/detail/piano_roll.rs
+  file: crates/ui/src/detail/piano_roll/drawing.rs
   find: 'let\s+note\s*=\s*shown\(i,\s*note\);'
   after: "\n        #[cfg(target_arch = \"wasm32\")] if preview.is_some() && state.selected.contains(&i) { crate::app::live::moving_note(&note); }"
 - live: true
-  file: crates/ui/src/detail/piano_roll.rs
+  file: crates/ui/src/detail/piano_roll/drawing.rs
   find: 'for\s+note\s+in\s+&drawn\s*\{'
   before: "#[cfg(target_arch = \"wasm32\")] crate::app::live::drawn_notes(&drawn);\n    "
 - live: true
@@ -357,14 +421,14 @@
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::piano(ui, &clip.address, layout.grid, layout.key_height, &|b| layout.x_of(b), &|x| layout.beat_at(x), &|k| layout.y_of(k), &|y| layout.key_at(y));"
 - live: true
   file: crates/ui/src/session/mixer_strip.rs
-  find: 'let\s+db\s*=\s*volume_drag\(ui,\s*&response,\s*column,\s*state,\s*actions\);\s*paint_fader\(ui,\s*painter,\s*readout,\s*fader,\s*db,\s*&response\);'
+  find: 'let\s+db\s*=\s*volume_drag\(ui,\s*&response,\s*column,\s*state,\s*actions\);\s*paint_fader\(ui,\s*painter,\s*readout,\s*fader,\s*db,\s*&response(?:,\s*[^;]*?)?\);'
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::fader(painter, column.track, fader);"
 - live: true
   file: crates/ui/src/session/mixer_strip.rs
-  find: 'widgets::knob\(painter,\s*knob_rect\.center\(\),\s*theme::KNOB,\s*\(\(pan\s*\+\s*1\.0\)\s*/\s*2\.0\)\s*as\s*f32,\s*theme::text_primary\(\)\);'
-  after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::pan(painter, column.track, knob_rect);"
+  find: 'widgets::knob\(\s*painter,\s*Pos2::new\(row\.left\(\)\s*\+\s*size\s*/\s*2\.0,\s*row\.center\(\)\.y\),'
+  before: "#[cfg(target_arch = \"wasm32\")] crate::app::live::pan(painter, column.track, Rect::from_min_size(Pos2::new(row.left(), row.center().y - size / 2.0), egui::Vec2::splat(size)));\n        "
 - live: true
-  file: crates/ui/src/detail/detail_view.rs
+  file: crates/ui/src/detail/detail_view/parameters.rs
   find: 'if\s+let\s+Some\(response\)\s*=\s*response\.filter\(\|r\|\s*r\.changed\(\)\s*\|\|\s*r\.drag_stopped\(\)\)\s*\{'
   before: "#[cfg(target_arch = \"wasm32\")] crate::app::live::param(painter, track, &at.value(), &parameter.id, slider_rect, value, parameter.min, parameter.max, response.as_ref().is_some_and(|r| r.dragged()));\n    "
 - live: true

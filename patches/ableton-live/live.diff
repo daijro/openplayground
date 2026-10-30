@@ -313,12 +313,12 @@ index 0000000..9f13962
 +
 +    /// Changes whenever the project may have.
 +    pub fn live_generation(&self) -> u64 {
-+        self.changes
++        self.history.changes
 +    }
 +
 +    /// The folder the project's audio names start from here.
 +    pub fn live_folder(&self) -> std::path::PathBuf {
-+        self.audio_folder.clone().unwrap_or_else(|| std::path::PathBuf::from("/"))
++        self.audio.folder.clone().unwrap_or_else(|| std::path::PathBuf::from("/"))
 +    }
 +
 +    /// Puts a shared document's project in: no step of the undo history, the playing engine follows, and audio files
@@ -329,9 +329,9 @@ index 0000000..9f13962
 +            return Ok(());
 +        }
 +        let scenes = std::mem::replace(&mut self.project, project).launcher;
-+        self.changes = self.changes.wrapping_add(1);
-+        self.open_step = None;
-+        self.param_gesture = None;
++        self.history.changes = self.history.changes.wrapping_add(1);
++        self.history.open_step = None;
++        self.history.param_gesture = None;
 +        self.live_decode();
 +        let shift = suhina_engine::SceneShift::between(&scenes, &self.project.launcher);
 +        self.update_player(shift).map_err(|e| e.0)?;
@@ -344,18 +344,18 @@ index 0000000..9f13962
 +        let folder = self.live_folder();
 +        let mut added = false;
 +        for name in audio_files(&self.project) {
-+            if self.audio.files.contains_key(&name) {
++            if self.audio.pool.files.contains_key(&name) {
 +                continue;
 +            }
 +            let Some(path) = file_at(&folder, &name).filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file())) else {
 +                continue;
 +            };
 +            if let Ok(data) = suhina_media::decode_file(&path) {
-+                self.audio.files.insert(name, std::sync::Arc::new(data));
++                self.audio.pool.files.insert(name, std::sync::Arc::new(data));
 +                added = true;
 +            }
 +        }
-+        self.audio_changed |= added;
++        self.audio.changed |= added;
 +        added
 +    }
 +
@@ -383,9 +383,9 @@ index 0000000..9f13962
 +
 +    /// The session ended: Undo starts again from the project as it is.
 +    pub fn live_disconnected(&mut self) {
-+        self.undo.clear();
-+        self.redo.clear();
-+        self.open_step = None;
++        self.history.undo.clear();
++        self.history.redo.clear();
++        self.history.open_step = None;
 +    }
 +}
 +
