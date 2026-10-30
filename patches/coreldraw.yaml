@@ -17,7 +17,7 @@
 # rewrites files.rs, find its picker, its download and its whole-file write again and hook them the same way.
 
 # Rule 1/8: the module (wasm only).
-- file: apps/tracedraw/src/main.rs
+- file: apps/tracedraw/src/lib.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: its Files (patches/coreldraw.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod playground;\n"
 
