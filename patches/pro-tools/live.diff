@@ -799,7 +799,7 @@ index 0000000..3ef6251
 +    }
 +    if ctx.input(|i| i.pointer.any_down()) {
 +        let mut set = BTreeMap::new();
-+        for (id, p) in app.engine.journal.get(PRESSED_AT.get()..).into_iter().flatten() {
++        for (id, p) in app.engine.journal.iter().skip(PRESSED_AT.get()).map(|(id, p)| (id, p)) {
 +            if id == "midi.note_edit"
 +                && p["clip"].as_u64() == Some(r.clip)
 +                && let (Some(i), Some(v)) = (p["index"].as_u64(), p["velocity"].as_u64())
@@ -967,7 +967,7 @@ index 0000000..3ef6251
 +            midi_marks(self, ctx, &mut state);
 +            let since = PRESSED_AT.get();
 +            if ctx.input(|i| i.pointer.any_down())
-+                && let Some((c, value)) = self.engine.journal.get(since..).and_then(|j| j.iter().rev().find_map(|c| Some((c, value_text(s, c)?))))
++                && let Some((c, value)) = self.engine.journal.iter().skip(since).rev().find_map(|c| Some((c, value_text(s, c)?)))
 +            {
 +                state["value"] = value.into();
 +                // A fader, pan knob or send level: the others show it on theirs (end_frame).
