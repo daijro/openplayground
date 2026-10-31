@@ -103,6 +103,9 @@
 - file: crates/engine/src/chain.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/engine/src/clock.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
 - file: crates/engine/src/cpu.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
