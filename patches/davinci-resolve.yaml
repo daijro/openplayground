@@ -18,8 +18,57 @@
   find: '\[target\.''cfg\(target_arch = "wasm32"\)''\.dependencies\]'
   after: "\ntracing.workspace = true"
 
+# picasso-ui's platform.rs names picasso_drp::DrpProject (Incoming::Resolved) on every target, but only links
+# picasso-drp off the web. picasso-drp is pure Rust (zip + quick-xml), so link it for wasm too. Drop the rule once
+# upstream declares it for every target.
+- file: crates/picasso-ui/Cargo.toml
+  find: '^picasso-aaf\.workspace = true'
+  after: "\npicasso-drp.workspace = true"
+
 # picasso-ui only links picasso-decode off the web, but read_path names it on both: on wasm the path is never read
 # (CAN_READ_PATHS is false), so the check is false there. Drop the rule once upstream's wasm build compiles.
 - file: crates/picasso-ui/src/platform.rs
   find: 'picasso_decode::refuse_path\(path\)\.is_none\(\)'
   replace: '{ #[cfg(not(target_arch = "wasm32"))] { picasso_decode::refuse_path(path).is_none() } #[cfg(target_arch = "wasm32")] { false } }'
+
+# Incoming::Probed names picasso_media::MediaMetadata (desktop only crate); projectfile::MediaMetadata is the same type
+# on the desktop and a stub in the browser, so name that one. Drop the rule once upstream does.
+- file: crates/picasso-ui/src/platform.rs
+  find: 'probed: Result<picasso_media::MediaMetadata, String>'
+  replace: 'probed: Result<crate::projectfile::MediaMetadata, String>'
+
+# Same for FpsPrompt::probed.
+- file: crates/picasso-ui/src/fps_prompt.rs
+  find: 'pub probed: Option<Result<picasso_media::MediaMetadata, String>>'
+  replace: 'pub probed: Option<Result<crate::projectfile::MediaMetadata, String>>'
+
+# add_probed exists on the desktop only; in the browser nothing is probed, so import the file the usual way.
+- file: crates/picasso-ui/src/fps_prompt.rs
+  find: 'Some\(probed\) => self\.add_probed\(first, false, probed\),'
+  replace: '#[cfg(not(target_arch = "wasm32"))] Some(probed) => self.add_probed(first, false, probed), #[cfg(target_arch = "wasm32")] Some(_) => self.import_file(first),'
+
+# The scope worker thread is desktop only (the field is None in the browser, where scopes are measured in place).
+- file: crates/picasso-ui/src/color_page.rs
+  find: 'scope_worker: spawn_scope_worker\(\),'
+  replace: 'scope_worker: { #[cfg(not(target_arch = "wasm32"))] { spawn_scope_worker() } #[cfg(target_arch = "wasm32")] { None } },'
+
+# export_cache (the cache an export reads) is used by the shared Deliver page, so keep it on every target.
+- file: crates/picasso-ui/src/proxy.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\s*(pub\(crate\) fn export_cache)'
+  replace: '$1'
+
+# probe_file is desktop only; the browser has no file to read again when media is relinked, so it knows nothing.
+- file: crates/picasso-ui/src/relink.rs
+  find: 'crate::app::probe_file\(&f\.path, f\.audio\)\.ok\(\)'
+  replace: '{ #[cfg(not(target_arch = "wasm32"))] { crate::app::probe_file(&f.path, f.audio).ok() } #[cfg(target_arch = "wasm32")] { None } }'
+
+# The browser's MediaMetadata stub has no path to update.
+- file: crates/picasso-ui/src/media_management.rs
+  find: 'fact\.path = path\.clone\(\);'
+  replace: '#[cfg(not(target_arch = "wasm32"))] { fact.path = path.clone(); }'
+
+# The page-timing run (PICASSO_PERF=pages) is desktop only, and its `page`/`pages` are gated, but the match on `page`
+# is not. Gate the match too. Drop the rule once upstream gates it.
+- file: apps/studio/src/main.rs
+  find: '^( *)match page \{'
+  replace: "$1#[cfg(not(target_arch = \"wasm32\"))]\n$1match page {"
