@@ -424,7 +424,7 @@
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::piano(ui, &clip.address, layout.grid, layout.key_height, &|b| layout.x_of(b), &|x| layout.beat_at(x), &|k| layout.y_of(k), &|y| layout.key_at(y));"
 - live: true
   file: crates/ui/src/session/mixer_strip.rs
-  find: 'let\s+db\s*=\s*volume_drag\(ui,\s*&response,\s*column,\s*state,\s*actions\);\s*paint_fader\(ui,\s*painter,\s*readout,\s*fader,\s*db,\s*&response(?:,\s*[^;]*?)?\);'
+  find: 'let\s+db\s*=\s*volume_drag\([^;]*?\);\s*paint_fader\(ui,\s*painter,\s*readout,\s*fader,\s*db,\s*&response(?:,\s*[^;]*?)?\);'
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::fader(painter, column.track, fader);"
 - live: true
   file: crates/ui/src/session/mixer_strip.rs
