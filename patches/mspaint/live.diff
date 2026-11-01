@@ -286,7 +286,9 @@ index 0000000..54446a9
 +            roots.push(l.id);
 +            // Filters are not shared: a kept layer keeps its own, a new one has none.
 +            let filters = current.layers.get(&l.id).map(|o| o.filters.clone()).map_or_else(|| FilterStack::new(Vec::new()).map_err(invalid), Ok)?;
-+            out.insert(l.id, Layer { id: l.id, name: l.name.to_owned(), origin: l.origin, visible: l.visible, opacity: l.opacity, raster, filters });
++            // Masks are not shared either: a kept layer keeps its own.
++            let mask = current.layers.get(&l.id).and_then(|o| o.mask.clone());
++            out.insert(l.id, Layer { id: l.id, name: l.name.to_owned(), origin: l.origin, visible: l.visible, opacity: l.opacity, raster, filters, mask });
 +        }
 +        Ok(Document {
 +            document_id: current.document_id,
