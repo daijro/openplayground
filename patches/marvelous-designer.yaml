@@ -109,6 +109,8 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the worker without its thread, and the clock (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n#[cfg(target_arch = \"wasm32\")]\n#[path = \"worker_web.rs\"]\nmod web;\n#[cfg(target_arch = \"wasm32\")] pub(crate) use web::{pump, start};\n"
 
+# (workspace_profiles.rs below: its cross-process lock uses std's real OpenOptions and File, so lock_profile names the real
+# `::std::fs::File`, not the playground's in-memory one that the shadowing `std` gives. If upstream drops the lock, delete that rule.)
 # Rules 18-41/41: the modules that use the clock or the files outside the editor's tree take `std` from the playground
 # crate on wasm (see the top). Found with: every non-test module that names Instant, SystemTime, fs:: or File:: and runs on
 # the page, except those the page never reaches (the solver lab, the GPU solver, the avatar inspector, project.rs, the
@@ -174,6 +176,9 @@
 - file: src/atelier/workspace.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: see selection.rs (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
+- file: src/atelier/workspace_profiles.rs
+  find: '(fn lock_profile\(path: &Path\) -> Result<)std::fs::File'
+  replace: "$1::std::fs::File"
 - file: src/atelier/svg_import_ui.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files (patches/marvelous-designer.yaml).\n#[cfg(target_arch = \"wasm32\")] use clothcraft_playground::std;\n"
