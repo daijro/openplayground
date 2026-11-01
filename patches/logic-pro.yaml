@@ -123,6 +123,21 @@
 - file: crates/prowave-app/src/file_commands.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: Playground's file dialogs (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+- file: crates/prowave-app/src/file_browser.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: no folder dialog (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+# Audio input (capture.rs): upstream leaves it out on wasm, but the app uses InputSource and MAX_INPUT_CHANNELS
+# everywhere, so the module is built on the web too (its std from crates/prowave-playground like the others). If
+# upstream gates the app's use of it instead, delete these three rules.
+- file: crates/prowave-engine/src/lib.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\s*mod\s+capture\s*;'
+  replace: 'mod capture;'
+- file: crates/prowave-engine/src/lib.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\s*pub\s+use\s+crate::capture::'
+  replace: 'pub use crate::capture::'
+- file: crates/prowave-engine/src/capture.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files, threads and clock (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use prowave_playground::std;\n"
 - file: crates/prowave-app/src/window_chrome.rs
   find: '\bpub\s+const\s+CUSTOM\s*:\s*bool\s*=\s*([^;]+);'
   replace: 'pub const CUSTOM: bool = $1 && !cfg!(target_arch = "wasm32");'

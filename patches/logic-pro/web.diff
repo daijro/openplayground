@@ -120,6 +120,9 @@ index 0000000..0ffe2e7
 +            super::ASKED.set(Some(super::Ask::Open));
 +            None
 +        }
++        pub fn pick_folder(self) -> Option<PathBuf> {
++            None
++        }
 +        pub fn save_file(self) -> Option<PathBuf> {
 +            super::ASKED.set(Some(super::Ask::Save { copy: self.title.contains("Copy") }));
 +            None
