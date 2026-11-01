@@ -400,7 +400,7 @@
   after: "\n// Live editing in a Playground session (web only).\n#[cfg(any(target_arch = \"wasm32\", test))]\npub mod live;\n"
 - live: true
   file: crates/ui-egui/src/panels/timeline.rs
-  find: '^\s*let\s+ph\s*=\s*app\.session\.playhead\(\)\s*;'
+  find: '^\s*let\s+ph\s*=\s*app\.(?:session\.playhead|shown_playhead)\(\)\s*;'
   before: "    #[cfg(any(target_arch = \"wasm32\", test))] crate::live::paint_timeline(app, ui, &layout);\n"
 - live: true
   file: crates/ui-egui/src/panels/timeline.rs
