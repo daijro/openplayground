@@ -63,3 +63,12 @@
 - file: apps/tracedraw/src/app.rs
   find: '\bpub\s+fn\s+show_web_notice\s*\(\s*&mut\s+self\s*\)\s*\{'
   after: "\n        // Playground: files are in its Files, not uploads and downloads (patches/coreldraw.yaml).\n        #[cfg(target_arch = \"wasm32\")]\n        return;"
+
+# Rule 9/9: randomness in the browser. Upstream's wasm dependencies enable getrandom's wasm_js feature for 0.2 and 0.3,
+# but lopdf and others now pull getrandom 0.4, which does not compile for wasm32-unknown-unknown without that feature.
+# This adds a wasm-only dependency on getrandom 0.4 with wasm_js (the existing getrandom_backend cfg selects it). Verify:
+# `cargo check --target wasm32-unknown-unknown` compiles. If upstream enables the feature itself (a getrandom 0.4 line
+# with wasm_js in apps/tracedraw/Cargo.toml) or drops getrandom 0.4, delete this rule.
+- file: apps/tracedraw/Cargo.toml
+  find: '^getrandom03\s*=.*$'
+  after: "\ngetrandom04 = { package = \"getrandom\", version = \"0.4\", features = [\"wasm_js\"] }"
