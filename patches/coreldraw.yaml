@@ -57,6 +57,14 @@
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
   after: "\n/// Playground's browser build: the Help next to the page (patches/coreldraw.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub const BASE: &str = \"help/\";"
 
+# Rule 9: lopdf 0.46 (and rand 0.10) draw random numbers through getrandom 0.4, which upstream's browser build does
+# not enable the wasm_js backend of (the `--cfg getrandom_backend` in .cargo/config.toml needs the feature too), so
+# the wasm build fails with "wasm32-unknown-unknown are not supported by default". Adds the feature next to upstream's
+# getrandom 0.3 one. Verify: `cargo check --target wasm32-unknown-unknown` passes. Delete once upstream enables it.
+- file: apps/tracedraw/Cargo.toml
+  find: '^getrandom03\s*=\s*\{[^\n]*\n'
+  after: "getrandom04 = { package = \"getrandom\", version = \"0.4\", features = [\"wasm_js\"] }\n"
+
 # Rule 8/8: upstream's browser build greets each visit with a message that files open and save by upload and download
 # and that the desktop app is faster; in Playground files are in Files, so it isn't shown. If upstream renames
 # show_web_notice, follow.
