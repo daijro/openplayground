@@ -74,17 +74,17 @@
 
 # Rules 12-15/33: `run` starts the app on the page (web.rs) instead of a window; the window's options, runner and icon
 # have no browser side.
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/entry.rs
   find: '\bpub\s+fn\s+run\s*\(\s*\)\s*\{'
   before: "#[cfg(target_arch = \"wasm32\")] pub fn run() { web::start() }\n#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/lib.rs
-  find: '\bfn\s+build_options\s*\(\s*\)\s*->\s*eframe::NativeOptions'
+- file: apps/procraft/src/entry.rs
+  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+build_options\s*\(\s*\)\s*->\s*eframe::NativeOptions'
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/lib.rs
-  find: '\bfn\s+run_with\s*\(\s*options\s*:\s*eframe::NativeOptions\s*\)'
+- file: apps/procraft/src/entry.rs
+  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+run_with\s*\(\s*options\s*:\s*eframe::NativeOptions\s*\)'
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/lib.rs
-  find: '\bfn\s+app_icon\s*\(\s*\)'
+- file: apps/procraft/src/entry.rs
+  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+app_icon\s*\(\s*\)'
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
 
 # Rules 16-31/33: the open dialogs take the iOS build's route on the web, which waits for a file across frames: what
@@ -93,63 +93,63 @@
 # branch beside each still runs, as on Android: its `pick_file` asks Playground's Open and gives nothing now. Found
 # with: grep -c 'pending_open = Some(PendingOpen::' (one more: the frame's check). If upstream drops an Open… button, drop a
 # rule (the build fails until then); if it adds one, add a rule (without, its Open dialog opens nothing).
-- file: apps/procraft/src/lib.rs
-  find: '#\[cfg\(any\(target_os = "ios", target_os = "android"\)\)\](\s*#\[derive\([^)]*\)\]\s*enum\s+PendingOpen\b)'
+- file: apps/procraft/src/files.rs
+  find: '#\[cfg\(any\(target_os = "ios", target_os = "android"\)\)\](\s*#\[derive\([^)]*\)\]\s*(?:pub(?:\([a-z]+\))?\s+)?enum\s+PendingOpen\b)'
   replace: '#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
-  find: '#\[cfg\(any\(target_os = "ios", target_os = "android"\)\)\](\s*fn\s+open_picked\b)'
+- file: apps/procraft/src/pixels.rs
+  find: '#\[cfg\(any\(target_os = "ios", target_os = "android"\)\)\](\s*(?:pub\(crate\)\s+)?fn\s+open_picked\b)'
   replace: '#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*pending_open\s*:\s*Option<PendingOpen>)'
+- file: apps/procraft/src/app.rs
+  find: '#\[cfg\(target_os = "ios"\)\](\s*(?:pub\(crate\)\s+)?pending_open\s*:\s*Option<PendingOpen>)'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/app.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*pending_open\s*:\s*None\b)'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/app_ui.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*if\s+let\s+Some\(kind\)\s*=\s*self\.pending_open\.take\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/panels.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/panels.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/panels.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/panels.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/file_menu.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/file_menu.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/file_menu.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/timelapse.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/app_ui.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/app_ui.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/app_ui.rs
   find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
   replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
 
 # Rule 32/33: a pen's pressure (web.rs, from the page's PointerEvents) comes first where the brushes read the touch
 # force egui passes on. If upstream renames latest_touch_force, follow.
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/files.rs
   find: '\bfn\s+latest_touch_force\s*\(\s*ctx\s*:\s*&egui::Context\s*\)\s*->\s*Option<f32>\s*\{'
   after: "\n    #[cfg(target_arch = \"wasm32\")] if let Some(p) = web::pen_pressure() { return Some(p); }"
 
 # Rule 33/33: the Gallery's Duplicate looks for a free name through `std::fs` (Path::exists asks the real file system,
 # which has none of the page's files), so it never writes over an earlier copy in Files.
-- file: apps/procraft/src/lib.rs
+- file: apps/procraft/src/doc_actions.rs
   find: 'if\s+!dest\.exists\(\)\s*\{'
   replace: 'if !(dest.exists() || cfg!(target_arch = "wasm32") && std::fs::metadata(&dest).is_ok()) {'
