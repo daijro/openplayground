@@ -90,6 +90,9 @@
   find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+run_with\s*\(\s*options\s*:\s*eframe::NativeOptions\s*\)'
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
 - file: apps/procraft/src/entry.rs
+  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+run_native\s*\(\s*options\s*:\s*eframe::NativeOptions\s*\)'
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: apps/procraft/src/entry.rs
   find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+app_icon\s*\(\s*\)'
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
 
