@@ -115,6 +115,8 @@ index 0000000..e3f4174
 +pub use ::playground_live;
 +
 +// DocState::new for a made-here workbook, which differs by channel (livedoc.diff, livedoc.head.diff).
++#[path = "live_compat.rs"]
++mod compat;
 +#[path = "live_doc.rs"]
 +mod live_doc;
 +
@@ -239,7 +241,8 @@ index 0000000..e3f4174
 +        Drag::ResizeCol { col, .. } => json!({"col": col, "width": round(sh.col_width(col).into())}),
 +        Drag::ResizeRow { row, .. } => json!({"row": row, "height": round(sh.row_height(row).into())}),
 +        Drag::MoveCols { before: Some(before), .. } => json!({"before": before}),
-+        Drag::Object { kind, id, .. } => {
++        Drag::Object { .. } => {
++            let (kind, id) = compat::drag_object(drag)?;
 +            let a = object(sh, Some(kind), id)?;
 +            let (x, y) = (sh.col_left(a.cell.col) + f64::from(a.dx), sh.row_top(a.cell.row) + f64::from(a.dy));
 +            json!({"object": [kind, id], "rect": [round(x), round(y), round(a.width.into()), round(a.height.into())]})
@@ -964,7 +967,7 @@ index 0000000..e3f4174
 +            let round = |f: f32| (f64::from(f) * 100.0).round() / 100.0;
 +            state["pointer"] = json!([at.a1(), round(x), round(y)]);
 +        }
-+        if let Some(id) = self.selected_chart.filter(|&id| object(sh, None, id).is_some()) {
++        if let Some(id) = compat::selected_chart(self).filter(|&id| object(sh, None, id).is_some()) {
 +            state["object"] = id.into();
 +        }
 +        let z = grid.geo.as_ref().map_or(1.0, |g| g.z);

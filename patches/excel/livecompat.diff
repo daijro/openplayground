@@ -1,0 +1,21 @@
+diff --git a/crates/ui-egui/src/live_compat.rs b/crates/ui-egui/src/live_compat.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/ui-egui/src/live_compat.rs
+@@ -0,0 +1,18 @@
++//! The two places the live adapter touches upstream types that differ between versions.
++use crate::SheetApp;
++use crate::grid::Drag;
++
++/// The kind name and id of the floating object a drag moves or resizes.
++pub fn drag_object(d: &Drag) -> Option<(&'static str, u32)> {
++    match *d {
++        Drag::Object { kind, id, .. } => Some((kind, id)),
++        _ => None,
++    }
++}
++
++/// The selected chart's id.
++pub fn selected_chart(app: &SheetApp) -> Option<u32> {
++    app.selected_chart
++}
