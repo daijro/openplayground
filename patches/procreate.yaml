@@ -48,6 +48,12 @@
 - file: crates/engine/src/document.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files, the image crate's included (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
+- file: crates/engine/src/document/io.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files, the image crate's included (patches/procreate.yaml). Explicit, as `use super::*` alone makes `std` ambiguous.\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
+- file: crates/engine/src/document/selection.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/procreate.yaml). Explicit, as `use super::*` alone makes `std` ambiguous.\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
 - file: crates/engine/src/probrush.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files, the image crate's included (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
