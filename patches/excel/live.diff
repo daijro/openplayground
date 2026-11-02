@@ -807,7 +807,7 @@ index 0000000..e3f4174
 +                return Err(format!("cell {a1} of {} is not one GridCraft stores", sh.name));
 +            }
 +            let style = c.style.map_or(StyleId::DEFAULT, |s| wb.styles.intern(s));
-+            sh.cells.set(at, Cell { value: c.value, formula: c.formula, style });
++            sh.cells.set(at, Cell { value: c.value, formula: c.formula, style, ..Default::default() });
 +        }
 +        if let Some(old) = local.sheets.iter().find(|old| old.name == sh.name) {
 +            (sh.zoom, sh.view, sh.view_active, sh.view_top_left) = (old.zoom, old.view, old.view_active, old.view_top_left);
