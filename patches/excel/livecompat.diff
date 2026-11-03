@@ -9,13 +9,13 @@ new file mode 100644
 +
 +/// The kind name and id of the floating object a drag moves or resizes.
 +pub fn drag_object(d: &Drag) -> Option<(&'static str, u32)> {
-+    match *d {
-+        Drag::Object { kind, id, .. } => Some((kind, id)),
++    match d {
++        Drag::Object { obj, .. } => Some((obj.kind.name(), obj.id)),
 +        _ => None,
 +    }
 +}
 +
 +/// The selected chart's id.
 +pub fn selected_chart(app: &SheetApp) -> Option<u32> {
-+    app.selected_chart
++    app.selected_chart()
 +}
