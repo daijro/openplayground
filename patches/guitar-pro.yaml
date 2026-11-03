@@ -44,12 +44,12 @@
 - file: crates/oxiguitar-play/Cargo.toml
   find: '(?![\s\S])'
   after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\noxiguitar-playground = { path = \"../oxiguitar-playground\" }\n"
-- file: plugins/soundfont/Cargo.toml
+- file: plugins/midi/Cargo.toml
   find: '(?![\s\S])'
   after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\noxiguitar-playground = { path = \"../../crates/oxiguitar-playground\" }\n"
 - file: crates/oxiguitar-app/Cargo.toml
   find: '(?![\s\S])'
-  after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\noxiguitar-playground = { path = \"../oxiguitar-playground\" }\noxiguitar-gp3-plugin = { path = \"../../plugins/gp3\" }\noxiguitar-gp4-plugin = { path = \"../../plugins/gp4\" }\noxiguitar-gp5-plugin = { path = \"../../plugins/gp5\" }\noxiguitar-gpx-plugin = { path = \"../../plugins/gpx\" }\noxiguitar-gp-plugin = { path = \"../../plugins/gp\" }\noxiguitar-soundfont-plugin = { path = \"../../plugins/soundfont\" }\noxiguitar-audio-web-plugin = { path = \"../../plugins/audio-web\" }\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"Storage\", \"Response\", \"DragEvent\", \"DataTransfer\", \"FileList\", \"File\", \"Blob\", \"Element\", \"HtmlElement\", \"Node\", \"console\"] }\n"
+  after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\noxiguitar-playground = { path = \"../oxiguitar-playground\" }\noxiguitar-gp3-plugin = { path = \"../../plugins/gp3\" }\noxiguitar-gp4-plugin = { path = \"../../plugins/gp4\" }\noxiguitar-gp5-plugin = { path = \"../../plugins/gp5\" }\noxiguitar-gpx-plugin = { path = \"../../plugins/gpx\" }\noxiguitar-gp-plugin = { path = \"../../plugins/gp\" }\noxiguitar-midi-plugin = { path = \"../../plugins/midi\" }\noxiguitar-audio-web-plugin = { path = \"../../plugins/audio-web\" }\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"Storage\", \"Response\", \"DragEvent\", \"DataTransfer\", \"FileList\", \"File\", \"Blob\", \"Element\", \"HtmlElement\", \"Node\", \"console\"] }\n"
 
 # The plugin SDK: several plugins linked into one program. The glue's `PLUGIN` (one per library) becomes one per plugin
 # type on wasm (glue/web.rs), whose table's `start` and `call` say whose call it is; and `export_plugin!` gives each
@@ -98,25 +98,25 @@
   after: "\n// Playground's browser build: the clock (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
 
 # The SoundFont plugin: the sound sets in memory, and SoundFont 3 decoded on the page's one thread.
-- file: plugins/soundfont/src/lib.rs
+- file: plugins/midi/src/lib.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the sound sets in memory (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
-- file: plugins/soundfont/src/sets.rs
+- file: plugins/midi/src/sets.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the sound sets in memory (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
-- file: plugins/soundfont/src/settings.rs
+- file: plugins/midi/src/settings.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the sound sets in memory (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
-- file: plugins/soundfont/src/sf3.rs
+- file: plugins/midi/src/sf3.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: decoding on the page's one thread (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
-- file: plugins/soundfont/src/sfz/mod.rs
+- file: plugins/midi/src/sfz/mod.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files in memory, read on the page's one thread (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
-- file: plugins/soundfont/src/sfz/sample.rs
+- file: plugins/midi/src/sfz/sample.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files in memory (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
-- file: plugins/soundfont/src/sfz/text.rs
+- file: plugins/midi/src/sfz/text.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files in memory (patches/guitar-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxiguitar_playground::std;\n"
 

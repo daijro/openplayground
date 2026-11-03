@@ -87,7 +87,7 @@ new file mode 100644
 +        "gp5" => oxiguitar_gp5_plugin,
 +        "gpx" => oxiguitar_gpx_plugin,
 +        "gp" => oxiguitar_gp_plugin,
-+        "soundfont" => oxiguitar_soundfont_plugin,
++        "soundfont" => oxiguitar_midi_plugin,
 +        "audio-web" => oxiguitar_audio_web_plugin,
 +    );
 +    if let Some(text) = storage().and_then(|s| s.get_item(SETTINGS_KEY).ok().flatten()) {
