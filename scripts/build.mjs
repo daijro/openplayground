@@ -39,6 +39,9 @@ import { LIVE_KIT, applyDiffs, diffDir, installLive, tidyDiffs } from './diffs.m
 import { CHANNELS, JUNK, builtAssets, channelAssets, resolveVersion, tools } from './releases.mjs'
 
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
+// GitHub runners provide `zip`; Windows development hosts commonly do not. Use the
+// built-in tar implementation there, while preserving the existing archive layout.
+const ARCHIVE = process.platform === 'win32' ? 'tar' : 'zip'
 // Rust's default wasm32 features. wasm-opt reads them from the module's target_features section, which
 // some builds strip; without them it assumes the 2017 baseline and rejects e.g. memory.copy.
 // Plus simd, which prepare() turns on (see SIMD).
@@ -182,7 +185,10 @@ const build = async (slug, channel) => {
   mkdirSync('out', { recursive: true })
   rmSync(join(work, id), { recursive: true, force: true })
   cpSync(dist, join(work, id), { recursive: true })
-  run('zip', ['-qr9', resolve('out', `${id}.zip`), id], { cwd: work })
+  const archiveArgs = process.platform === 'win32'
+    ? ['-a', '-c', '-f', resolve('out', `${id}.zip`), id]
+    : ['-qr9', resolve('out', `${id}.zip`), id]
+  run(ARCHIVE, archiveArgs, { cwd: work })
   console.log(`built out/${id}.zip`)
 }
 

@@ -81,6 +81,11 @@
   find: 'pub\s+mod\s+fs\s*\{'
   after: "\n        /// A read handle into one file in the browser's in-memory notebook.\n        pub struct File { path: PathBuf, position: usize }\n\n        impl File {\n            pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {\n                let path = key(path.as_ref());\n                if !metadata(&path)?.is_file() {\n                    return Err(io::Error::new(io::ErrorKind::InvalidInput, \"not a file\"));\n                }\n                Ok(Self { path, position: 0 })\n            }\n        }\n\n        impl io::Read for File {\n            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {\n                let path = self.path.clone();\n                let position = self.position;\n                let count = TREE.with(|tree| match tree.borrow().entries.get(&path) {\n                    Some(Entry::File(bytes, _)) => {\n                        let start = position.min(bytes.len());\n                        let rest = &bytes[start..];\n                        let count = rest.len().min(buffer.len());\n                        buffer[..count].copy_from_slice(&rest[..count]);\n                        Ok(count)\n                    }\n                    _ => Err(missing(&path)),\n                })?;\n                self.position += count;\n                Ok(count)\n            }\n        }\n"
 
+# Add Seek to the browser File shim so ZIP-backed imports can read through the virtual notebook.
+- file: crates/model/src/playground.rs
+  find: '(impl\s+io::Read\s+for\s+File\s*\{[\s\S]*?\n        \})'
+  replace: "$1\n\n        impl io::Seek for File {\n            fn seek(&mut self, from: io::SeekFrom) -> io::Result<u64> {\n                let length = metadata(&self.path)?.len() as i64;\n                let position = self.position as i64;\n                let next = match from {\n                    io::SeekFrom::Start(n) => n as i64,\n                    io::SeekFrom::Current(n) => position.saturating_add(n),\n                    io::SeekFrom::End(n) => length.saturating_add(n),\n                };\n                if next < 0 { return Err(io::Error::new(io::ErrorKind::InvalidInput, \"negative seek\")); }\n                self.position = next as usize;\n                Ok(self.position as u64)\n            }\n        }"
+
 # Rules 12-15/28: the page file, the child folders, the attachments and the page open last, as `fs::metadata` reads
 # them (Path::is_file and is_dir are exactly that, through the real file system).
 # Verify: the tree shows the notebooks and a page with a picture lists it. If upstream changes: anchor on the
@@ -94,6 +99,9 @@
 - file: crates/store/src/assets.rs
   find: '\.filter\(\|e\|\s*e\.path\(\)\.is_file\(\)\)'
   replace: '.filter(|e| fs::metadata(e.path()).is_ok_and(|m| m.is_file()))'
+- file: crates/store/src/ops.rs
+  find: 'entry\.file_type\(\)\?\.is_dir\(\)'
+  replace: 'fs::metadata(entry.path()).is_ok_and(|m| m.is_dir())'
 # The page the window closed on opens again (its check asks the file system).
 - file: crates/ui-egui/src/app.rs
   find: 'if\s+!path\.is_dir\(\)'
@@ -105,6 +113,34 @@
 - file: crates/ui-egui/src/app.rs
   find: 'rfd::FileDialog::new\(\)[^;]*?\.pick_folder\(\)'
   replace: '({ #[cfg(not(target_arch = "wasm32"))] { $& } #[cfg(target_arch = "wasm32")] { None::<std::path::PathBuf> } })'
+
+# The browser has no native file picker. Keep desktop behavior through a native re-export,
+# while making every picker call site compile and return no selection on wasm.
+- file: crates/ui-egui/src/app.rs
+  find: 'rfd::FileDialog::new\(\)'
+  replace: 'playground_rfd::FileDialog::new()'
+- file: crates/ui-egui/src/app.rs
+  find: 'let picker = rfd::FileDialog::new\(\)'
+  replace: 'let picker = playground_rfd::FileDialog::new()'
+- file: crates/ui-egui/src/app.rs
+  find: 'let mut picker = rfd::FileDialog::new\(\)'
+  replace: 'let mut picker = playground_rfd::FileDialog::new()'
+- file: crates/ui-egui/src/app.rs
+  find: 'rfd::FileDialog::new\(\)\.set_title\("Choose a OneNote notebook folder"\)'
+  replace: 'playground_rfd::FileDialog::new().set_title("Choose a OneNote notebook folder")'
+- file: crates/ui-egui/src/app.rs
+  find: 'rfd::FileDialog::new\(\)\.set_title\("Choose a file to import"\)'
+  replace: 'playground_rfd::FileDialog::new().set_title("Choose a file to import")'
+- file: crates/ui-egui/src/app.rs
+  find: 'rfd::FileDialog::new\(\)\.set_title\("Add file to this page"\)'
+  replace: 'playground_rfd::FileDialog::new().set_title("Add file to this page")'
+- file: crates/ui-egui/src/app.rs
+  find: '(?![\s\S])'
+  after: "\n#[cfg(target_arch = \"wasm32\")] mod playground_rfd {\n    use std::path::PathBuf;\n    pub struct FileDialog;\n    impl FileDialog {\n        pub fn new() -> Self { Self }\n        pub fn set_title(self, _: &str) -> Self { self }\n        pub fn set_file_name(self, _: impl AsRef<str>) -> Self { self }\n        pub fn pick_folder(self) -> Option<PathBuf> { None }\n        pub fn pick_file(self) -> Option<PathBuf> { None }\n        pub fn save_file(self) -> Option<PathBuf> { None }\n    }\n}\n#[cfg(not(target_arch = \"wasm32\"))] mod playground_rfd {\n    pub use ::rfd::FileDialog;\n}\n"
+
+- file: crates/ui-egui/src/app.rs
+  find: 'pub struct FileDialog;'
+  after: "\n    impl FileDialog { pub fn set_directory(self, _: impl AsRef<std::path::Path>) -> Self { self } pub fn add_filter(self, _: &str, _: &[&str]) -> Self { self } }\n"
 
 # Rule 17/28: upstream pins its toolchain (rust-toolchain.toml, profile minimal), which rustup installs without the
 # wasm target: CI then fails with "can't find crate for `core`". The pin also asks for the target here.
@@ -159,7 +195,7 @@
 # The dependency, kept for every target but wasm (a new table at the end, with the stand-in's web dependencies).
 - file: crates/ui-egui/Cargo.toml
   find: '^(arboard\s*=[^\n]*\n)([\s\S]*)'
-  replace: "$2\n# Playground's web build (patches/onenote.yaml): arboard has no browser clipboard.\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\n$1\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\n"
+  replace: "$2\n# Playground's web build (patches/onenote.yaml): arboard has no browser clipboard.\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\n$1\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\ngetrandom = { version = \"0.3\", features = [\"wasm_js\"] }\n"
 - file: crates/ui-egui/src/clipboard.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the browser's clipboard (patches/onenote.yaml).\n#[cfg(target_arch = \"wasm32\")] #[path = \"playground_clipboard.rs\"] pub(crate) mod arboard;\n"

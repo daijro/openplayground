@@ -687,6 +687,9 @@ index 0000000..295f3b0
 +            pub fn metadata(&self) -> io::Result<Metadata> {
 +                metadata(&self.0)
 +            }
++            pub fn file_type(&self) -> io::Result<Metadata> {
++                metadata(&self.0)
++            }
 +        }
 +
 +        pub fn read_dir<P: AsRef<Path>>(p: P) -> io::Result<::std::vec::IntoIter<io::Result<DirEntry>>> {
@@ -721,7 +724,13 @@ index 0000000..f851b31
 +use wasm_bindgen::{JsCast as _, JsValue};
 +
 +/// Nothing to hand over: no read has arrived for this Paste, or the clipboard has no such thing.
++#[derive(Clone, Copy, PartialEq, Eq)]
 +pub struct Error;
++
++impl Error {
++    #[allow(non_upper_case_globals)]
++    pub const ClipboardOccupied: Self = Self;
++}
 +
 +impl std::fmt::Display for Error {
 +    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

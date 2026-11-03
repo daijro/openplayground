@@ -280,7 +280,7 @@ groups:
         accent: "#FF8F6B"
         base: "#3D1308"
 
-      - slug: onenote
+      - slug: notecraft
         name: NoteCraft
         alternative: OneNote
         blurb: Notebooks, sections and pages for notes, kept as plain folders of HTML and Markdown pages.
