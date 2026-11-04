@@ -67,6 +67,18 @@
   find: 'fact\.path = path\.clone\(\);'
   replace: '#[cfg(not(target_arch = "wasm32"))] { fact.path = path.clone(); }'
 
+# edit_page's preset list uses effect_presets on every target; the module only needs project_manager::data_dir, which
+# exists on wasm too (it returns None there). Drop the gate. Drop the rule once upstream ungates the module.
+- file: crates/picasso-ui/src/lib.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\s*(mod effect_presets;)'
+  replace: '$1'
+
+# effect_presets uses serde and serde_json, which picasso-ui only declares off the web. Declare them for wasm too (the
+# workspace pins them). Drop the rule once upstream declares them for wasm32.
+- file: crates/picasso-ui/Cargo.toml
+  find: '\[target\.''cfg\(target_arch = "wasm32"\)''\.dependencies\]'
+  after: "\nserde.workspace = true\nserde_json.workspace = true"
+
 # The page-timing run (PICASSO_PERF=pages) is desktop only, and its `page`/`pages` are gated, but the match on `page`
 # is not. Gate the match too. Drop the rule once upstream gates it.
 - file: apps/studio/src/main.rs
