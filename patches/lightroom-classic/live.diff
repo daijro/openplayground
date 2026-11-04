@@ -1590,7 +1590,7 @@ index 0000000..f42249a
 +            BeforeAfter::TopBottom => egui::Rect::from_min_max(egui::pos2(area.left(), area.center().y + 14.0), area.max),
 +            _ => area,
 +        };
-+        let map = crate::live_crop::map(&frame, photo.develop.crop.geometry, area, app.crop_layout);
++        let map = crate::live_crop::map(&frame, photo.develop.crop.geometry, area, app.crop_layout.clone());
 +        let o = canvas.center();
 +        let [n, x, y] = [o, o + egui::vec2(100.0, 0.0), o + egui::vec2(0.0, 100.0)].map(|p| map.norm(p));
 +        let (a, b, c, d) = ((x.x - n.x) / 100.0, (x.y - n.y) / 100.0, (y.x - n.x) / 100.0, (y.y - n.y) / 100.0);
