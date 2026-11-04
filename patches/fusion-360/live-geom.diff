@@ -1,0 +1,20 @@
+# What it's for: live.diff's adapter names the vector and plane types, and calls their methods, through
+# crates/ui-egui/src/documents_geom.rs (live.diff declares it). Here they are solidcraft_engine::geom's own types
+# (up to the release that moved them to solidcore_record: live-geom.head.diff).
+# If upstream changes: re-export the same names, `traits` holding whatever the methods need in scope.
+diff --git a/crates/ui-egui/src/documents_geom.rs b/crates/ui-egui/src/documents_geom.rs
+new file mode 100644
+index 00000000..6e3a2538
+--- /dev/null
++++ b/crates/ui-egui/src/documents_geom.rs
+@@ -0,0 +1,10 @@
++//! The geometry types of the live-editing adapter, as this checkout spells them.
++pub use solidcraft_engine::geom::{Plane, Vec2, Vec3};
++
++/// The session's model with its placed bodies in world space.
++pub fn world_state(s: &solidcraft_engine::Session) -> std::sync::Arc<solidcraft_engine::doc::ModelState> {
++    s.world_state()
++}
++
++/// Traits whose methods the types need in scope (none here).
++pub mod traits {}

@@ -3,7 +3,7 @@ new file mode 100644
 index 00000000..4657069a
 --- /dev/null
 +++ b/apps/solidcraft-web/src/live.rs
-@@ -0,0 +1,1439 @@
+@@ -0,0 +1,1441 @@
 +//! Live editing in a Playground session (the playground-live crate, patches/live/kit, drives it through [`App`]). The
 +//! shared document is the set of designs open in the session, `{ documents: [{ id, ...design }] }`: the one shown when
 +//! the session started and every design opened, created or imported here or by the others since (once it holds
@@ -30,7 +30,9 @@ index 00000000..4657069a
 +use egui::{Color32, Pos2, Rect, Shape, Stroke, pos2, vec2};
 +use serde_json::{Map, Value, json};
 +use solidcraft_engine::doc::{Document, FeatureKind};
-+use solidcraft_engine::geom::{Aabb3, Plane, Vec2, Vec3};
++use solidcraft_engine::geom::Aabb3;
++#[allow(unused_imports)]
++use solidcraft_ui_egui::documents::live::geom::{Plane, Vec2, Vec3, traits::*, world_state};
 +use solidcraft_engine::{Sel, Session};
 +use solidcraft_ui_egui::dialogs::{self, Dialog, Kind};
 +use solidcraft_ui_egui::documents::{self, live as tabs};
@@ -217,7 +219,7 @@ index 00000000..4657069a
 +            }
 +            let id = playground_live::fresh_id(&mut sh.next);
 +            let m = mark(s);
-+            sh.docs.push(Doc { id, mark: m, at: i, last: projection(s, **pre), seen: None });
++            sh.docs.push(Doc { id, mark: m, at: i, last: projection(s, *pre), seen: None });
 +            sh.version += 1;
 +        }
 +    });
@@ -558,7 +560,7 @@ index 00000000..4657069a
 +}
 +
 +/// Installs a shared design in a tab, keeping this person's views; no undo step.
-+fn install(s: &mut Session, pre_sketch_marker: &mut Option<Option<usize>>, mut doc: Document) {
++fn install(s: &mut Session, pre_sketch_marker: Option<Option<usize>>, mut doc: Document) {
 +    let local = &s.doc;
 +    doc.next_id = doc.next_id.max(local.next_id);
 +    for f in &mut doc.features {
@@ -566,8 +568,8 @@ index 00000000..4657069a
 +            sketch.view = local.sketch(f.id).map(|s| s.view.clone()).unwrap_or_default();
 +        }
 +    }
-+    if let Some(marker) = pre_sketch_marker {
-+        *marker = std::mem::replace(&mut doc.marker, local.marker);
++    if pre_sketch_marker.is_some() {
++        doc.marker = local.marker;
 +    }
 +    // The same design (the owner adopting its own): nothing to do.
 +    if doc == **local {
@@ -727,7 +729,7 @@ index 00000000..4657069a
 +    let mut out = Map::new();
 +    let Some(rect) = app.viewport.rect.filter(|_| !app.home.open) else { return out };
 +    let proj = viewport::projection(app, rect);
-+    let st = app.session.world_state();
++    let st = world_state(&app.session);
 +    if let Some(sid) = app.session.active_sketch
 +        && let Some(plane) = st.sketch(sid).map(|ss| ss.plane)
 +    {
@@ -876,7 +878,7 @@ index 00000000..4657069a
 +    let proj = viewport::projection(app, rect);
 +    let (o, d) = proj.ray(mouse);
 +    let near = |q: Vec3| o + d * ((q - o).dot(d) / d.len2());
-+    let st = app.session.world_state();
++    let st = world_state(&app.session);
 +    // Not far out on a plane seen edge-on.
 +    let reach = proj.cam.half_height() * 20.0;
 +    let sketch = |id: u64| {
@@ -951,7 +953,7 @@ index 00000000..4657069a
 +    // Points a millimetre at the view's target, and a quarter of the view: a jump wider than that goes at once.
 +    let ease = (1.0 / mm_per_px(&proj), f64::from(rect.height()) / 4.0);
 +    let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-+    let st = app.session.world_state();
++    let st = world_state(&app.session);
 +    for o in &here {
 +        let c = presence::color(o);
 +        if let Some(b) = numbers::<6>(&o.state["box"]).and_then(|b| eased(ctx, o, "box", b, ease)) {
@@ -1136,7 +1138,7 @@ index 00000000..4657069a
 +        None => {
 +            let Ok(doc) = design(last) else { return };
 +            let mut s = Session::default();
-+            install(&mut s, &mut None, doc);
++            install(&mut s, None, doc);
 +            s.mark_saved();
 +            let m = mark(&mut s);
 +            let Ok(i) = tabs::open_behind(app, s) else { return };
@@ -1179,7 +1181,7 @@ index 00000000..4657069a
 +    /// Another peer: a design holding `design` (one of a shared document's), changed by `cmd`.
 +    fn peer(design: &Value, cmd: &str, p: Value) -> Value {
 +        let mut x = app();
-+        install(&mut x.session, &mut None, super::design(design.clone()).unwrap());
++        install(&mut x.session, None,super::design(design.clone()).unwrap());
 +        x.run(cmd, p).unwrap();
 +        project(&x.session.doc)
 +    }
@@ -1342,7 +1344,7 @@ index 00000000..4657069a
 +    fn presence_gives_the_design_the_pointer_the_selection_and_a_shape_being_drawn() {
 +        let mut a = bound();
 +        a.run(BOX.0, BOX.1()).unwrap();
-+        let body = a.session.world_state().bodies[0].name.clone();
++        let body = world_state(&a.session).bodies[0].name.clone();
 +        a.session.selection = vec![Sel::Body { name: body }];
 +        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
 +        (a.viewport.rect, a.viewport.mouse, a.viewport.hover) = (Some(rect), None, None);
@@ -1384,7 +1386,7 @@ index 00000000..4657069a
 +        let sketch = a.session.active_sketch.unwrap();
 +        a.finish_sketch();
 +        // The tab's profile (the face's outline around it is another).
-+        let st = a.session.world_state();
++        let st = world_state(&a.session);
 +        let area = |p: &solidcraft_engine::sketch::Profile| {
 +            let l = p.region.outer.polyline(1e-2);
 +            l.iter().zip(l.iter().cycle().skip(1)).map(|(p, q)| p.x * q.y - q.x * p.y).sum::<f64>().abs()
@@ -1448,7 +1450,7 @@ new file mode 100644
 index 00000000..6e3a2537
 --- /dev/null
 +++ b/crates/ui-egui/src/documents_live.rs
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,43 @@
 +//! Live editing in a Playground session (the web app's `live` module): every open design, and a design opened in a tab
 +//! behind the others. Nothing here runs unless that module calls it.
 +
@@ -1459,21 +1461,21 @@ index 00000000..6e3a2537
 +
 +/// Each open design's session and Edit Sketch's saved timeline position, in tab order (the active one is the app's).
 +pub fn designs(app: &SolveApp) -> Vec<(&Session, Option<Option<usize>>)> {
-+    let active = (&app.session, app.pre_sketch_marker);
++    let active = (&app.session, app.session.sketch_restore_marker());
 +    if app.docs.slots.is_empty() {
 +        return vec![active];
 +    }
-+    app.docs.slots.iter().map(|s| s.as_ref().map_or(active, |d| (&d.session, d.pre_sketch_marker))).collect()
++    app.docs.slots.iter().map(|s| s.as_ref().map_or(active, |d| (&d.session, d.session.sketch_restore_marker()))).collect()
 +}
 +
 +/// [`designs`], to change.
-+pub fn designs_mut(app: &mut SolveApp) -> Vec<(&mut Session, &mut Option<Option<usize>>)> {
-+    let SolveApp { session, pre_sketch_marker, docs, .. } = app;
-+    let mut active = Some((session, pre_sketch_marker));
++pub fn designs_mut(app: &mut SolveApp) -> Vec<(&mut Session, Option<Option<usize>>)> {
++    let SolveApp { session, docs, .. } = app;
++    let mut active = Some((session.sketch_restore_marker(), session));
 +    if docs.slots.is_empty() {
-+        return active.into_iter().collect();
++        return active.into_iter().map(|(m, s)| (s, m)).collect();
 +    }
-+    docs.slots.iter_mut().filter_map(|s| s.as_mut().map(|d| (&mut d.session, &mut d.pre_sketch_marker)).or_else(|| active.take())).collect()
++    docs.slots.iter_mut().filter_map(|s| s.as_mut().map(|d| (d.session.sketch_restore_marker(), &mut d.session)).or_else(|| active.take())).map(|(m, s)| (s, m)).collect()
 +}
 +
 +/// Opens `session` in a new last tab, leaving the active design as it is; its index.
@@ -1488,3 +1490,7 @@ index 00000000..6e3a2537
 +    app.docs.slots.push(Some(DocSlot::new(session)));
 +    Ok(app.docs.slots.len() - 1)
 +}
++
++/// The geometry types and the traits of their methods, as this checkout spells them (live-geom.diff).
++#[path = "documents_geom.rs"]
++pub mod geom;
