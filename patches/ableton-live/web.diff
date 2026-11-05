@@ -28,7 +28,7 @@ index 0000000..9a0b1f0
 +suhina-playground = { path = "../../crates/playground" }
 +serde_json.workspace = true
 +cpal = { workspace = true, features = ["wasm-bindgen"] }
-+eframe = { version = "0.36", default-features = false, features = ["glow", "persistence", "default_fonts"] }
++eframe = { version = "0.37", default-features = false, features = ["glow", "persistence", "default_fonts"] }
 +# accesskit's ids want the browser's random numbers on wasm.
 +uuid = { version = "1", features = ["js"] }
 +wasm-bindgen = "0.2"
