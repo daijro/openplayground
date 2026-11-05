@@ -123,6 +123,9 @@
 - file: crates/prowave-app/src/file_commands.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: Playground's file dialogs (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+- file: crates/prowave-app/src/inspector.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: Playground's file dialogs (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
 - file: crates/prowave-app/src/file_browser.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: no folder dialog (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
