@@ -1,0 +1,289 @@
+diff --git a/Trunk.toml b/Trunk.toml
+new file mode 100644
+index 0000000..18a1207
+--- /dev/null
++++ b/Trunk.toml
+@@ -0,0 +1,7 @@
++# NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground).
++# Build with: trunk build --release   (from the repository's root)
++[build]
++target = "index.html"
++public_url = "./"
++filehash = true
++dist = "target/trunk-dist"
+diff --git a/crates/platform/src/ui/web.rs b/crates/platform/src/ui/web.rs
+new file mode 100644
+index 0000000..a1171bb
+--- /dev/null
++++ b/crates/platform/src/ui/web.rs
+@@ -0,0 +1,168 @@
++// SPDX-License-Identifier: MIT
++//! NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground): the
++//! desktop window on the page's canvas, and its files in Playground's Files.
++//!
++//! `ui::run` starts as on the desktop; mod.rs takes [`eframe`] from here on the web, whose `run_native` starts the
++//! app on the page. Files live in memory (notepad-playground's `fs`): a file from Files comes in at its path
++//! (`browser:/Notes/a.txt` is `/Notes/a.txt` here), and what the editor writes goes back to Files. Open and Save As
++//! are Playground's dialogs instead of the egui file dialog; "Open in NoteCraft Text" and a file dropped on the page
++//! open as File > Open does. A file from the computer or a drop lives under `/tmp`, and saving it downloads it.
++use super::{actions, state::{FileDialog, Shell, Tab}};
++use notepad_playground::{call, fs};
++use std::cell::{Cell, OnceCell, RefCell};
++use std::path::{Path, PathBuf};
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++
++/// The file types Open offers and a Save As names (the dialogs add the first when a name has none).
++const TYPES: [&str; 18] = [
++    "txt", "md", "markdown", "log", "ini", "cfg", "conf", "json", "xml", "yaml", "yml", "toml", "csv", "tsv", "html",
++    "htm", "css", "js",
++];
++
++enum Event {
++    /// A file is in memory at this path: open it.
++    Open(PathBuf),
++    /// Save As answered: write this tab to this path.
++    SaveAs(usize, PathBuf),
++}
++
++thread_local! {
++    static CTX: OnceCell<egui::Context> = const { OnceCell::new() };
++    static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
++    static UNSAVED: Cell<bool> = const { Cell::new(false) };
++}
++
++fn push(event: Event) {
++    EVENTS.with_borrow_mut(|e| e.push(event));
++    CTX.with(|c| c.get().map(egui::Context::request_repaint));
++}
++
++/// The desktop's eframe, with `run_native` starting the app on the page instead.
++pub(crate) mod eframe {
++    pub use ::eframe::*;
++
++    /// The desktop window's options, which a page has no use for.
++    #[derive(Default)]
++    #[allow(dead_code)]
++    pub struct NativeOptions {
++        pub viewport: egui::ViewportBuilder,
++    }
++
++    /// Starts the app on the page's canvas, made by `creator` once the page's context exists; returns at once.
++    pub fn run_native(_name: &str, _options: NativeOptions, creator: ::eframe::AppCreator<'static>) -> ::eframe::Result {
++        super::start(creator);
++        Ok(())
++    }
++}
++
++fn get(o: &JsValue, k: &str) -> JsValue {
++    js_sys::Reflect::get(o, &k.into()).unwrap_or(JsValue::UNDEFINED)
++}
++
++async fn wait(v: Option<JsValue>) -> Option<JsValue> {
++    let promise = v?.dyn_into::<js_sys::Promise>().ok()?;
++    wasm_bindgen_futures::JsFuture::from(promise).await.ok().filter(|v| !v.is_null() && !v.is_undefined())
++}
++
++/// `{ name, types }` for the dialogs (`name` only when given).
++fn options(name: Option<&str>) -> JsValue {
++    let o = js_sys::Object::new();
++    let types: js_sys::Array = TYPES.iter().map(|t| JsValue::from(*t)).collect();
++    let _ = js_sys::Reflect::set(&o, &"types".into(), &types);
++    if let Some(name) = name {
++        let _ = js_sys::Reflect::set(&o, &"name".into(), &name.into());
++    }
++    o.into()
++}
++
++/// A file from Files (`{ path, name, bytes }`) into memory at its path (one from the computer, under `/tmp`), then open.
++fn file_in(file: JsValue) {
++    let Some(name) = get(&file, "name").as_string() else { return };
++    let path = match get(&file, "path").as_string() {
++        Some(p) => PathBuf::from(p.strip_prefix("browser:").unwrap_or(&p)),
++        None => Path::new("/tmp").join(name),
++    };
++    fs::put(&path, js_sys::Uint8Array::new(&get(&file, "bytes")).to_vec());
++    push(Event::Open(path));
++}
++
++/// File > Open: Playground's Open, over all of Files.
++pub(super) fn open_dialog() {
++    let asked = call("open", &[options(None)]);
++    wasm_bindgen_futures::spawn_local(async move {
++        if let Some(files) = wait(asked).await {
++            js_sys::Array::from(&files).iter().for_each(file_in);
++        }
++    });
++}
++
++/// File > Save as: Playground's Save As. Its answer is a path in Files, or, for "Download to device", one under `/tmp`.
++pub(super) fn save_as_dialog(tab: usize, name: String) {
++    let name = if name.is_empty() { "Untitled.txt".to_owned() } else { name };
++    let asked = call("saveAs", &[options(Some(&name))]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(answer) = wait(asked).await else { return };
++        let path = match get(&answer, "path").as_string() {
++            Some(p) => PathBuf::from(p.strip_prefix("browser:").unwrap_or(&p)),
++            None => Path::new("/tmp").join(&name),
++        };
++        push(Event::SaveAs(tab, path));
++    });
++}
++
++/// After the frame's drawing: what came in (Files, dialogs, drops), and the unsaved state for the leave warning.
++pub(super) fn frame(shell: &mut Shell, ctx: &egui::Context) {
++    // A dropped file is only a name on the web: its bytes are read, then it opens like a file from the computer.
++    for f in ctx.input(|i| i.raw.dropped_files.clone()) {
++        wasm_bindgen_futures::spawn_local(async move {
++            if let (Ok(bytes), Some(name)) = (f.bytes_async().await, f.path().file_name()) {
++                let path = Path::new("/tmp").join(name);
++                fs::put(&path, bytes);
++                push(Event::Open(path));
++            }
++        });
++    }
++    for event in EVENTS.take() {
++        match event {
++            Event::Open(path) => actions::open_path(shell, &path, None),
++            Event::SaveAs(tab, path) => {
++                let Some(document) = shell.tabs.get(tab) else { continue };
++                let (encoding, bom) = (document.file.encoding(), document.file.has_bom());
++                // As the egui dialog's Save would: the write, and whatever the save was for (closing the tab).
++                shell.file_dialog = Some(FileDialog::save_as(tab, path.to_string_lossy().into_owned(), encoding, bom));
++                actions::confirm_file_dialog(shell);
++            }
++        }
++    }
++    let unsaved = shell.tabs.iter().any(Tab::is_dirty);
++    if UNSAVED.replace(unsaved) != unsaved {
++        call("setUnsaved", &[unsaved.into()]);
++    }
++}
++
++/// [`eframe::run_native`] on the web.
++fn start(creator: ::eframe::AppCreator<'static>) {
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("NoteCraft Text: {info}").into())));
++    call("onOpen", &[Closure::<dyn Fn(JsValue)>::new(file_in).into_js_value()]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
++        let canvas = document
++            .get_element_by_id("notecraft_canvas")
++            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
++            .expect("no #notecraft_canvas");
++        let creator = move |cc: &::eframe::CreationContext<'_>| {
++            CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
++            creator(cc)
++        };
++        let runner = ::eframe::WebRunner::new();
++        let started = runner.start(canvas, ::eframe::WebOptions::default(), Box::new(creator)).await;
++        // The runner lives as long as the page.
++        std::mem::forget(runner);
++        if let Some(loading) = document.get_element_by_id("notecraft_loading") {
++            match started {
++                Ok(()) => loading.remove(),
++                Err(e) => loading.set_text_content(Some(&format!("NoteCraft Text could not start: {e:?}"))),
++            }
++        }
++    });
++}
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..b5db5b6
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,20 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>NoteCraft Text</title>
++  <!-- NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground). -->
++  <link data-trunk rel="rust" href="crates/app/Cargo.toml" data-bin="notepad" data-wasm-opt="0" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #202020; }
++    #notecraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
++    #notecraft_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #f0f0f0; font: 14px system-ui, sans-serif; pointer-events: none; }
++  </style>
++</head>
++<body>
++  <canvas id="notecraft_canvas"></canvas>
++  <div id="notecraft_loading">Loading NoteCraft Text&hellip;</div>
++</body>
++</html>
+diff --git a/notepad-playground/Cargo.toml b/notepad-playground/Cargo.toml
+new file mode 100644
+index 0000000..4f4430f
+--- /dev/null
++++ b/notepad-playground/Cargo.toml
+@@ -0,0 +1,13 @@
++# Playground's browser build of NoteCraft Text (patches/notepad.yaml in github.com/daijro/openplayground): the files
++# wasm32-unknown-unknown lacks, in memory and mirrored to Files. Native builds compile it empty.
++[package]
++name = "notepad-playground"
++version = "0.1.0"
++edition = "2024"
++description = "NoteCraft Text in the browser: files in memory, mirrored to Playground's Files"
++license = "MIT"
++publish = false
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++wasm-bindgen = "0.2"
++js-sys = "0.3"
+diff --git a/notepad-playground/src/lib.rs b/notepad-playground/src/lib.rs
+new file mode 100644
+index 0000000..026fb26
+--- /dev/null
++++ b/notepad-playground/src/lib.rs
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: MIT
++//! NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground).
++//!
++//! wasm32-unknown-unknown has no files: every `std::fs` call fails. `nc-textproc` takes `fs` from here instead.
++//! Files are kept in memory; a file from Files or a drop is [`fs::put`] in, and what the editor writes goes to
++//! Playground's Files (`playgroundFiles.write`), or, under `/tmp` (a file from the computer, or a Save As to
++//! download), to the browser's downloads.
++#![cfg(target_arch = "wasm32")]
++
++use js_sys::{Function, Reflect, Uint8Array};
++use wasm_bindgen::{JsCast as _, JsValue};
++
++/// `playgroundFiles[method](...args)`; None when the page has none or it threw.
++pub fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = Reflect::get(&js_sys::global(), &"playgroundFiles".into()).ok().filter(JsValue::is_object)?;
++    let f = Reflect::get(&api, &method.into()).ok()?.dyn_into::<Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++pub mod fs {
++    // What isn't here (OpenOptions, rename, ...) is std's, which fails on a page.
++    pub use ::std::fs::*;
++    use ::std::cell::RefCell;
++    use ::std::collections::BTreeMap;
++    use ::std::io;
++    use ::std::path::{Path, PathBuf};
++
++    thread_local! {
++        static FILES: RefCell<BTreeMap<PathBuf, Vec<u8>>> = const { RefCell::new(BTreeMap::new()) };
++    }
++
++    /// Stores a file that came in from Files or a drop.
++    pub fn put(path: &Path, bytes: Vec<u8>) {
++        FILES.with_borrow_mut(|f| f.insert(path.to_path_buf(), bytes));
++    }
++
++    pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
++        FILES.with_borrow(|f| f.get(path.as_ref()).cloned()).ok_or_else(|| io::ErrorKind::NotFound.into())
++    }
++
++    pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, bytes: C) -> io::Result<()> {
++        let (path, bytes) = (path.as_ref(), bytes.as_ref());
++        put(path, bytes.to_vec());
++        let data = super::Uint8Array::from(bytes);
++        match path.strip_prefix("/tmp") {
++            Ok(name) => super::call("download", &[name.to_string_lossy().as_ref().into(), data.into()]),
++            Err(_) => super::call("write", &[format!("browser:{}", path.display()).into(), data.into()]),
++        };
++        Ok(())
++    }
++}

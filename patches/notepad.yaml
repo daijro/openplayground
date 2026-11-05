@@ -1,0 +1,69 @@
+# NoteCraft Text in the browser. Upstream (github.com/cmspeedau/NoteCraft) has no browser build (its window is eframe's
+# native one) and no releases; these patches add the web build Playground serves, from its head commit.
+#
+# patches/notepad/web.diff adds new files only:
+#   index.html, Trunk.toml          the web build at the repository's root (build.mjs builds there): trunk builds the
+#                                   `notepad` binary, which starts as on the desktop, for the page's canvas.
+#   crates/platform/src/ui/web.rs   the page's side: mod.rs takes `eframe` from here on wasm, whose `run_native` starts the
+#                                   app on the canvas. File > Open and File > Save as are Playground's dialogs (`playgroundFiles`)
+#                                   in place of the egui file dialog; "Open in NoteCraft Text" and a dropped file open as
+#                                   Open does, and the unsaved state goes to the leave warning.
+#   notepad-playground/             what wasm32-unknown-unknown lacks: `fs` in memory (read and write, the only calls
+#                                   nc-textproc's TextFile makes that a page can answer), each write mirrored to Files.
+#
+# Files live in memory at their Files path (`browser:/Notes/a.txt` is `/Notes/a.txt`), so the editor's own checks (a file
+# changed on disk, reload) see them as on a disk. A write goes to Files; one from the computer or a drop lives under
+# /tmp and saving it downloads it (as does Save As > Download to device).
+# Off: the encoding choice of the Open and Save As dialogs (Open detects it, Save As keeps the document's), the settings
+# and the session (they live for the page: no config folder), the window's own minimize, maximize and close buttons and
+# Print. Native builds see none of this: every rule adds wasm-only lines.
+
+# Rule 1/11: upstream pins its toolchain (rust-toolchain.toml), which rustup installs without the wasm target: CI then
+# fails with "can't find crate for `core`". The pin also asks for the target here.
+# If upstream lists `targets` itself (or drops the pin), delete this rule.
+- file: rust-toolchain.toml
+  find: '^\[toolchain\]'
+  after: "\ntargets = [\"wasm32-unknown-unknown\"]"
+
+# Rules 2-3/11: the dependencies, all wasm-only: the playground crate, wgpu's WebGPU and WebGL2 backends (eframe's own wgpu
+# has neither: "No available adapters"), wasm-bindgen and the web-sys classes the page uses, and web-time for the F5 clock.
+- file: crates/platform/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/notepad.yaml): the page's canvas and dialogs, wgpu's backends, and the clock.\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nnotepad-playground = { path = \"../../notepad-playground\" }\nwgpu = { version = \"30\", features = [\"webgpu\", \"webgl\"] }\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"HtmlCanvasElement\"] }\nweb-time = \"1\"\n"
+- file: crates/textproc/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/notepad.yaml): the files.\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nnotepad-playground = { path = \"../../notepad-playground\" }\n"
+
+# Rules 4-5/11: TextFile's files are the in-memory ones, and its write is one call (no temporary file to rename).
+- file: crates/textproc/src/textfile.rs
+  find: '^use std::fs;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\nuse std::fs;\n// Playground's browser build: the files (patches/notepad.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse notepad_playground::fs;"
+- file: crates/textproc/src/textfile.rs
+  find: 'fn write_atomic\(path: &Path, bytes: &\[u8\]\) -> Result<Saved> \{'
+  after: "\n    // Playground's browser build: the in-memory files have no temporary file to rename (patches/notepad.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    {\n        fs::write(path, bytes).map_err(|source| Error::Write { path: path.to_path_buf(), source })?;\n        return Ok(Saved { path: path.to_path_buf(), bytes: bytes.len() });\n    }"
+
+# Rule 6/11: F5's clock: std's SystemTime panics on a page.
+- file: crates/platform/src/clock.rs
+  find: '^use std::time::\{SystemTime, UNIX_EPOCH\};'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\nuse std::time::{SystemTime, UNIX_EPOCH};\n// Playground's browser build (patches/notepad.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse web_time::{SystemTime, UNIX_EPOCH};"
+
+# Rule 7/11: no log subscriber on a page (its timestamps read std's SystemTime, which panics there).
+- file: crates/app/src/logging.rs
+  find: 'pub fn init\(\) \{'
+  after: "\n    // Playground's browser build (patches/notepad.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    return;"
+
+# Rules 8-9/11: the window (ui/mod.rs): the page's frame hook after the drawing, and `eframe` from the page's side.
+- file: crates/platform/src/ui/mod.rs
+  find: '^(\s*)draw\(&mut self\.shell, ui\);'
+  after: "\n        // Playground's browser build: what came in and the unsaved state (patches/notepad.yaml).\n        #[cfg(target_arch = \"wasm32\")]\n        web::frame(&mut self.shell, ui.ctx());"
+- file: crates/platform/src/ui/mod.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the page (ui/web.rs), whose eframe starts the app on the canvas (patches/notepad.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod web;\n#[cfg(target_arch = \"wasm32\")]\nuse web::eframe;\n"
+
+# Rules 10-11/11: File > Open and Save as ask Playground's dialogs.
+- file: crates/platform/src/ui/actions.rs
+  find: '(pub fn open_file_dialog\(shell: &mut Shell\) \{\n)    shell\.file_dialog = Some\(FileDialog::open\(\)\);'
+  replace: "$1    #[cfg(not(target_arch = \"wasm32\"))]\n    {\n        shell.file_dialog = Some(FileDialog::open());\n    }\n    // Playground's dialog (patches/notepad.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    super::web::open_dialog();"
+- file: crates/platform/src/ui/actions.rs
+  find: '    shell\.file_dialog = Some\(FileDialog::save_as\(tab, name, encoding, bom\)\);'
+  replace: "    #[cfg(not(target_arch = \"wasm32\"))]\n    {\n        shell.file_dialog = Some(FileDialog::save_as(tab, name, encoding, bom));\n    }\n    // Playground's dialog (patches/notepad.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    super::web::save_as_dialog(tab, name);"

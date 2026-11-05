@@ -301,6 +301,25 @@ groups:
         accent: "#CA64EA"
         base: "#2B0B40"
 
+      - slug: notepad
+        name: NoteCraft Text
+        alternative: Notepad
+        blurb: A fast, modern text and Markdown editor with tabs.
+        # Not the OneNote alternative NoteCraft above. Files open and save through Playground's dialogs; settings and the
+        # session aren't kept. Upstream has no releases yet, so it has the head channel only; patches/notepad.yaml adds
+        # the web build.
+        opens: [txt, md, markdown, log, ini, cfg, conf, json, xml, yaml, yml, toml]
+        imports: [csv, tsv, html, htm, css, js]
+        repo: cmspeedau/NoteCraft
+        license: MIT
+        copyright: "Copyright (c) 2026 cmspeedau"
+        # What the web build compiles: docs and CI commits don't rebuild it.
+        paths: [crates, Cargo.toml, Cargo.lock, rust-toolchain.toml]
+        patches: patches/notepad.yaml
+        icon: icons/notecraft-text.png
+        accent: "#4CC2FF"
+        base: "#0C2F44"
+
       - slug: outlook
         name: MailCraft
         alternative: Outlook
