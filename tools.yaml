@@ -230,6 +230,25 @@ groups:
         accent: "#C9A227"
         base: "#0B3D3A"
 
+      - slug: aseprite
+        name: PixelCraft
+        alternative: Aseprite
+        blurb: Pixel art, sprites and animation, with frames, layers and tiles.
+        # Its own projects (.pixel) and Aseprite's (.aseprite, .ase), and the images it opens; sprite sheets, Tiled maps and
+        # OpenRaster files import. Upstream has no releases, so like EarthCraft it has the head channel only; patches/aseprite.yaml
+        # adds the web build, without Lua scripting and WebP import.
+        opens: [pixel, aseprite, ase, png, apng, gif, bmp]
+        imports: [ora, tmj, tsj, json]
+        repo: asad-albadi/PixelCraft
+        license: MIT
+        copyright: "Copyright (c) 2026 Asàd Al-Badi"
+        # What the web build compiles: docs, tests and packaging commits don't rebuild it.
+        paths: [src, assets, examples, Cargo.toml, Cargo.lock]
+        patches: patches/aseprite.yaml
+        icon: icons/pixelcraft.png
+        accent: "#56C9B8"
+        base: "#1B2B31"
+
   - name: Office
     tools:
       - slug: word

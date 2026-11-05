@@ -1,0 +1,101 @@
+# PixelCraft in the browser. Upstream (github.com/asad-albadi/PixelCraft) has no browser build (no wasm32 code at all) and
+# no releases; these patches add the web build Playground serves, from its head commit.
+#
+# patches/aseprite/web.diff adds new files only:
+#   index.html, Trunk.toml     the web build at the repository's root (build.mjs builds there): trunk builds the `pixelcraft`
+#                              binary, the desktop's editor (src/main.rs), for the page's canvas.
+#   src/web.rs                 the page's side: `main` on wasm starts the editor on the canvas with eframe's WebRunner (its
+#                              glow renderer on WebGL2), and the rest of the desktop's code takes `rfd` from here. Open, Save,
+#                              Save As and the exports are Playground's dialogs (`playgroundFiles`): a desktop dialog can't
+#                              wait for an answer, so it asks the page and gives nothing, and when the answer comes the menu
+#                              action that began it runs again and the dialog answers at once. "Open in PixelCraft" and a
+#                              dropped file run Open the same way. What PixelCraft writes outside /tmp (a save, an export) goes
+#                              to Files after the frame, and a save to download is handed to the browser once written. The
+#                              unsaved state is reported with `setUnsaved`.
+#   src/playground.rs          what wasm32-unknown-unknown lacks: `std` with web-time's clock, an in-memory file system, a
+#                              `process::id` and a `temp_dir`, and an `image::open` and `RgbaImage::save` that use that file
+#                              system. The modules that use them take `std` (and `image`) from it on wasm through ONE `use` line
+#                              at their end (a local `std` shadows the standard library's name in that module, and in every
+#                              module below it that takes `use super::*`; everything else in it still comes from the real std).
+#   src/lua_web.rs             Lua without its shared library (see below).
+#
+# Off: Lua scripting (src/lua.rs loads a Lua shared library with `libloading`, which a page can't: every script, and so
+# installed extensions' commands, answers "Lua scripting is off in the browser build"), WebP import (src/interchange.rs loads
+# libwebpdemux the same way: "WebP import is off in the browser build"), the update check (it has no repository to ask
+# in this build anyway), installing extensions, running a Lua file and the tilesheet import (their file dialogs say so:
+# "Could not use this file dialog…"). Import PNG sequence takes the one file Playground's Open picks: a one-frame sprite. The recovery
+# backup is off (a page's files are its memory). Settings (theme, shortcuts) live for the page. The unsaved-changes question
+# is PixelCraft's own. Native builds see none of this: every rule adds wasm-only lines, and the native-only dependencies move to
+# a native-only table in Cargo.toml (the same crates, so the native build's dependency graph is unchanged).
+
+# The dependencies: rfd, libloading and ureq (nothing of PixelCraft's use of them has a wasm32 version) move, as they are, to a
+# native-only table; the page's go in a wasm-only one.
+- file: Cargo.toml
+  find: '^(rfd = .*\n)([\s\S]*?)(libloading = .*\n)([\s\S]*?)(ureq = .*\n)([\s\S]*?)(?=^\[profile)'
+  replace: "$2$4$6\n# Playground's browser build (patches/aseprite.yaml): the dependencies that have no wasm32 version, native only; and std's clock,\n# the page's canvas and its dialogs, wasm only.\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\n$1$3$5\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nweb-time = \"1\"\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"HtmlCanvasElement\"] }\n\n"
+
+# The library: Lua is the stub, and the playground module is declared.
+- file: src/lib.rs
+  find: '^mod lua;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\nmod lua;\n#[cfg(target_arch = \"wasm32\")]\n#[path = \"lua_web.rs\"]\nmod lua;"
+- file: src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: std's clock and files (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub mod playground;\n"
+
+# The update check needs a network thread and TLS; on the page it has no repository to ask, so it only answers.
+- file: src/updates.rs
+  find: '^pub fn check\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/updates.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files, and no update check (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n#[cfg(target_arch = \"wasm32\")]\npub fn check(_repository: &str, _ctx: eframe::egui::Context) -> mpsc::Receiver<Result<Release, String>> {\n    let (tx, rx) = mpsc::channel();\n    let _ = tx.send(Err(\"Update checks are off in the browser build.\".into()));\n    rx\n}\n"
+
+# The modules that use the clock or the files take `std` (and `image`, which reads files) from the playground module on wasm.
+# Found with: every non-test module that names fs::, Instant, SystemTime, env:: or process:: and runs on the page, and every
+# `image::open`. If upstream starts using these in another module, give it the same line; a missing one panics at the first
+# clock or temp_dir call (the page then stops) or fails the file call (a status line says so).
+- file: src/extensions.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock and files (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
+- file: src/formats.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
+- file: src/interchange.rs
+  find: '^pub fn load_webp\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/interchange.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock and files, and no WebP import: it loads libwebpdemux (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n#[cfg(target_arch = \"wasm32\")]\npub fn load_webp(_path: &Path) -> Result<Document, String> {\n    Err(\"WebP import is off in the browser build\".into())\n}\n"
+- file: src/main.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the page (web.rs), whose `main` starts the app on the canvas, and the clock and files that\n// studio.rs, which takes `use super::*`, shares (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] mod web;\n#[cfg(target_arch = \"wasm32\")] use pixelcraft::playground::std;\n#[cfg(target_arch = \"wasm32\")] use web::rfd;\n#[cfg(target_arch = \"wasm32\")]\nfn main() {\n    web::main();\n}\n"
+- file: src/studio.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock and files (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use pixelcraft::playground::std;\n"
+- file: src/script_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock and the file dialog (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use pixelcraft::playground::std;\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+
+# The editor: the desktop's `main` stays native-only; the recovery backup is off; a menu action tells the page which one
+# is running (see web.rs); and the files go to the in-memory ones: no `canonicalize`, and the images are written there.
+- file: src/main.rs
+  find: '^fn main\(\) -> eframe::Result \{'
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/main.rs
+  find: '(app\.studio\.recovery_enabled = )true;'
+  replace: "$1cfg!(not(target_arch = \"wasm32\"));"
+- file: src/studio.rs
+  find: 'pub\(super\) fn studio_action\(&mut self, s: &str\) -> bool \{'
+  after: "\n        // Playground's browser build: the page asks its dialogs after the frame (patches/aseprite.yaml).\n        #[cfg(target_arch = \"wasm32\")]\n        crate::web::action(s);"
+- file: src/formats.rs
+  find: 'let path = path\s*\.canonicalize\(\)\s*\.map_err\(\|e\| format!\("\{\}: \{e\}", path\.display\(\)\)\)\?;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $&\n    #[cfg(target_arch = \"wasm32\")]\n    let path = path.to_path_buf();"
+- file: src/formats.rs
+  find: 'im\.save\(path\)\.map_err\(\|e\| e\.to_string\(\)\)\?;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $&\n    #[cfg(target_arch = \"wasm32\")]\n    crate::playground::save(&im, path).map_err(|e| e.to_string())?;"
+- file: src/interchange.rs
+  find: 'im\.save\(path\)\.map_err\(\|e\| e\.to_string\(\)\)\?;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $&\n    #[cfg(target_arch = \"wasm32\")]\n    crate::playground::save(&im, path).map_err(|e| e.to_string())?;"
+- file: src/interchange.rs
+  find: 'im\.save\(path\.with_file_name\(&png\)\)\s*\.map_err\(\|e\| e\.to_string\(\)\)\?;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n        $&\n        #[cfg(target_arch = \"wasm32\")]\n        crate::playground::save(&im, path.with_file_name(&png)).map_err(|e| e.to_string())?;"

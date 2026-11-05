@@ -1,0 +1,670 @@
+diff --git a/Trunk.toml b/Trunk.toml
+new file mode 100644
+index 0000000..843a6e1
+--- /dev/null
++++ b/Trunk.toml
+@@ -0,0 +1,7 @@
++# PixelCraft in the browser, for Playground (patches/aseprite.yaml in github.com/daijro/openplayground).
++# Build with: trunk build --release   (from the repository's root)
++[build]
++target = "index.html"
++public_url = "./"
++filehash = true
++dist = "target/trunk-dist"
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..1daf830
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,20 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>PixelCraft</title>
++  <!-- PixelCraft in the browser, for Playground (patches/aseprite.yaml in github.com/daijro/openplayground). -->
++  <link data-trunk rel="rust" href="Cargo.toml" data-bin="pixelcraft" data-wasm-opt="0" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1b2b31; }
++    #pixelcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
++    #pixelcraft_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #e5f1ee; font: 14px system-ui, sans-serif; pointer-events: none; }
++  </style>
++</head>
++<body>
++  <canvas id="pixelcraft_canvas"></canvas>
++  <div id="pixelcraft_loading">Loading PixelCraft&hellip;</div>
++</body>
++</html>
+diff --git a/src/lua_web.rs b/src/lua_web.rs
+new file mode 100644
+index 0000000..17b6e03
+--- /dev/null
++++ b/src/lua_web.rs
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: MIT
++//! Lua in the browser, for Playground (patches/aseprite.yaml in github.com/daijro/openplayground): there is none. The
++//! desktop's lua.rs loads a Lua shared library, which a page can't, so every script says so.
++use crate::model::Document;
++
++pub type HostCallback = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
++
++const OFF: &str = "Lua scripting is off in the browser build";
++
++pub fn execute(
++    _doc: &Document,
++    _source: &str,
++    _frame: usize,
++    _layer: usize,
++    _command: Option<&str>,
++    _discover: bool,
++    _colors: Option<[[u8; 4]; 2]>,
++) -> Result<String, String> {
++    Err(OFF.into())
++}
++
++pub fn execute_with_host(
++    _doc: &Document,
++    _source: &str,
++    _frame: usize,
++    _layer: usize,
++    _command: Option<&str>,
++    _discover: bool,
++    _colors: Option<[[u8; 4]; 2]>,
++    _options: serde_json::Value,
++    _host: Option<HostCallback>,
++) -> Result<String, String> {
++    Err(OFF.into())
++}
+diff --git a/src/playground.rs b/src/playground.rs
+new file mode 100644
+index 0000000..adac51e
+--- /dev/null
++++ b/src/playground.rs
+@@ -0,0 +1,307 @@
++// SPDX-License-Identifier: MIT
++//! PixelCraft in the browser, for Playground (patches/aseprite.yaml in github.com/daijro/openplayground).
++//!
++//! wasm32-unknown-unknown has no clock, no files and no process: `Instant::now` and `SystemTime::now` panic there,
++//! every file call fails, and `env::temp_dir` and `process::id` panic. The modules that use them take `std` from here
++//! instead, through one `#[cfg(target_arch = "wasm32")] use crate::playground::std;` line at each one's end (a local `std`
++//! shadows the standard library's name in that module; everything else in it still comes from the real std):
++//!   time     web-time's Instant and SystemTime;
++//!   env      `temp_dir` is /tmp;
++//!   process  `id` is 1;
++//!   fs       an in-memory file system, each change noted for the page to mirror to Playground's Files.
++//! And `image`, whose `open` reads those in-memory files, and [`save`] for `RgbaImage::save`.
++//! Native builds don't compile this file.
++
++pub mod std {
++    pub use ::std::*;
++
++    pub mod time {
++        pub use web_time::*;
++    }
++
++    pub mod env {
++        pub use ::std::env::*;
++
++        pub fn temp_dir() -> ::std::path::PathBuf {
++            "/tmp".into()
++        }
++    }
++
++    pub mod process {
++        pub use ::std::process::*;
++
++        pub fn id() -> u32 {
++            1
++        }
++    }
++
++    pub mod fs {
++        // What isn't here (OpenOptions, metadata, ...) is std's, which fails on a page.
++        pub use ::std::fs::*;
++        use ::std::cell::RefCell;
++        use ::std::collections::{BTreeMap, BTreeSet};
++        use ::std::ffi::OsString;
++        use ::std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
++        use ::std::path::{Component, Path, PathBuf};
++
++        enum Entry {
++            Dir,
++            File(Vec<u8>),
++        }
++
++        #[derive(Default)]
++        struct Tree {
++            entries: BTreeMap<PathBuf, Entry>,
++            /// Paths written or removed since the last [`changes`].
++            changed: BTreeSet<PathBuf>,
++        }
++
++        thread_local! {
++            static TREE: RefCell<Tree> = RefCell::default();
++        }
++
++        fn with<T>(f: impl FnOnce(&mut Tree) -> T) -> T {
++            TREE.with(|t| f(&mut t.borrow_mut()))
++        }
++
++        /// `/a/./b/../c` -> `/a/c`: one spelling per file (relative paths start at `/`).
++        fn key(p: &Path) -> PathBuf {
++            let mut out = PathBuf::from("/");
++            for c in p.components() {
++                match c {
++                    Component::ParentDir => {
++                        out.pop();
++                    }
++                    Component::Normal(n) => out.push(n),
++                    _ => {}
++                }
++            }
++            out
++        }
++
++        fn missing(p: &Path) -> io::Error {
++            io::Error::new(io::ErrorKind::NotFound, format!("{} does not exist", p.display()))
++        }
++
++        impl Tree {
++            fn put(&mut self, p: PathBuf, bytes: Vec<u8>) {
++                for dir in p.ancestors().skip(1) {
++                    self.entries.entry(dir.to_path_buf()).or_insert(Entry::Dir);
++                }
++                self.entries.insert(p, Entry::File(bytes));
++            }
++            /// `p` and everything below it.
++            fn below(&self, p: &Path) -> Vec<PathBuf> {
++                self.entries.range(p.to_path_buf()..).map(|(k, _)| k).take_while(|k| k.starts_with(p)).cloned().collect()
++            }
++        }
++
++        /// Stores a file without noting a change (a file the page brings in from Files or a drop).
++        pub fn put(p: &Path, bytes: Vec<u8>) {
++            with(|t| t.put(key(p), bytes));
++        }
++
++        /// The paths changed since the last call: each now holds what Files should hold, or is gone.
++        pub fn changes() -> Vec<PathBuf> {
++            with(|t| ::std::mem::take(&mut t.changed).into_iter().collect())
++        }
++
++        pub fn exists(p: &Path) -> bool {
++            TREE.with(|t| t.borrow().entries.contains_key(&key(p)))
++        }
++
++        pub fn is_file(p: &Path) -> bool {
++            TREE.with(|t| matches!(t.borrow().entries.get(&key(p)), Some(Entry::File(_))))
++        }
++
++        pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(p: P, bytes: C) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                t.put(p.clone(), bytes.as_ref().to_vec());
++                t.changed.insert(p);
++            });
++            Ok(())
++        }
++
++        pub fn read<P: AsRef<Path>>(p: P) -> io::Result<Vec<u8>> {
++            TREE.with(|t| match t.borrow().entries.get(&key(p.as_ref())) {
++                Some(Entry::File(bytes)) => Ok(bytes.clone()),
++                _ => Err(missing(p.as_ref())),
++            })
++        }
++
++        pub fn read_to_string<P: AsRef<Path>>(p: P) -> io::Result<String> {
++            String::from_utf8(read(p)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
++        }
++
++        pub fn create_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                for dir in p.ancestors() {
++                    t.entries.entry(dir.to_path_buf()).or_insert(Entry::Dir);
++                }
++            });
++            Ok(())
++        }
++
++        pub fn create_dir<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            create_dir_all(p)
++        }
++
++        pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
++            let bytes = read(from)?;
++            let len = bytes.len() as u64;
++            write(to, bytes).map(|()| len)
++        }
++
++        pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
++            let bytes = read(&from)?;
++            remove_file(&from)?;
++            // The temporary file never was a change: only its new name is.
++            with(|t| t.changed.remove(&key(from.as_ref())));
++            write(to, bytes)
++        }
++
++        pub fn remove_file<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| match t.entries.remove(&p) {
++                Some(Entry::File(_)) => {
++                    t.changed.insert(p);
++                    Ok(())
++                }
++                _ => Err(missing(&p)),
++            })
++        }
++
++        pub fn remove_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                for gone in t.below(&p) {
++                    t.entries.remove(&gone);
++                    t.changed.insert(gone);
++                }
++            });
++            Ok(())
++        }
++
++        pub struct DirEntry(PathBuf);
++        pub struct FileType(bool);
++        pub struct Metadata(u64);
++
++        impl DirEntry {
++            pub fn path(&self) -> PathBuf {
++                self.0.clone()
++            }
++            pub fn file_name(&self) -> OsString {
++                self.0.file_name().unwrap_or_default().to_owned()
++            }
++            pub fn file_type(&self) -> io::Result<FileType> {
++                Ok(FileType(is_file(&self.0)))
++            }
++            pub fn metadata(&self) -> io::Result<Metadata> {
++                Ok(Metadata(read(&self.0).map_or(0, |b| b.len() as u64)))
++            }
++        }
++
++        impl FileType {
++            pub fn is_file(&self) -> bool {
++                self.0
++            }
++            pub fn is_dir(&self) -> bool {
++                !self.0
++            }
++            pub fn is_symlink(&self) -> bool {
++                false
++            }
++        }
++
++        impl Metadata {
++            pub fn len(&self) -> u64 {
++                self.0
++            }
++        }
++
++        pub fn read_dir<P: AsRef<Path>>(p: P) -> io::Result<::std::vec::IntoIter<io::Result<DirEntry>>> {
++            let dir = key(p.as_ref());
++            if TREE.with(|t| !matches!(t.borrow().entries.get(&dir), Some(Entry::Dir))) {
++                return Err(missing(&dir));
++            }
++            let entries = TREE.with(|t| {
++                t.borrow().below(&dir).into_iter().filter(|k| k.parent() == Some(&dir)).map(|k| Ok(DirEntry(k))).collect::<Vec<_>>()
++            });
++            Ok(entries.into_iter())
++        }
++
++        /// A file's bytes, read whole when it opens; one made by `create` is stored back when flushed or dropped.
++        pub struct File {
++            data: Cursor<Vec<u8>>,
++            /// Where written bytes go, for a file made by `create`.
++            to: Option<PathBuf>,
++            dirty: bool,
++        }
++
++        impl File {
++            pub fn open<P: AsRef<Path>>(p: P) -> io::Result<File> {
++                Ok(File { data: Cursor::new(read(p)?), to: None, dirty: false })
++            }
++            pub fn create<P: AsRef<Path>>(p: P) -> io::Result<File> {
++                write(p.as_ref(), [])?;
++                Ok(File { data: Cursor::new(Vec::new()), to: Some(key(p.as_ref())), dirty: false })
++            }
++            fn store(&mut self) {
++                if let (true, Some(to)) = (self.dirty, &self.to) {
++                    let _ = write(to, self.data.get_ref());
++                    self.dirty = false;
++                }
++            }
++        }
++
++        impl Read for File {
++            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++                self.data.read(buf)
++            }
++        }
++
++        impl Seek for File {
++            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
++                self.data.seek(pos)
++            }
++        }
++
++        impl Write for File {
++            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++                if self.to.is_none() {
++                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file is open to read"));
++                }
++                self.dirty = true;
++                self.data.write(buf)
++            }
++            fn flush(&mut self) -> io::Result<()> {
++                self.store();
++                Ok(())
++            }
++        }
++
++        impl Drop for File {
++            fn drop(&mut self) {
++                self.store();
++            }
++        }
++    }
++}
++
++/// The `image` crate, whose `open` reads the in-memory files (the real one reads the disk).
++pub mod image {
++    pub use ::image::*;
++
++    pub fn open<P: AsRef<::std::path::Path>>(path: P) -> ImageResult<DynamicImage> {
++        load_from_memory(&super::std::fs::read(path)?)
++    }
++}
++
++/// `RgbaImage::save(path)` as a PNG in the in-memory files (the real one writes the disk).
++pub fn save(im: &::image::RgbaImage, path: impl AsRef<::std::path::Path>) -> ::image::ImageResult<()> {
++    let mut png = ::std::io::Cursor::new(Vec::new());
++    im.write_to(&mut png, ::image::ImageFormat::Png)?;
++    Ok(std::fs::write(path, png.into_inner())?)
++}
+diff --git a/src/web.rs b/src/web.rs
+new file mode 100644
+index 0000000..b047ca5
+--- /dev/null
++++ b/src/web.rs
+@@ -0,0 +1,272 @@
++// SPDX-License-Identifier: MIT
++//! PixelCraft in the browser, for Playground (patches/aseprite.yaml in github.com/daijro/openplayground): the desktop
++//! window on the page's canvas, and its files in Playground's Files.
++//!
++//! Files live in memory (playground.rs's `std::fs`): a file from Files comes in at its path (`browser:/Art/hero.pixel` is
++//! `/Art/hero.pixel` here), and whatever PixelCraft writes outside /tmp (a save, an export) goes to Files after the
++//! frame. The desktop's file dialogs ([`rfd`]) can't wait for an answer, so they ask Playground's after the frame and
++//! give nothing now; when the answer comes, the menu action that began it (studio_action's) runs again and the dialog
++//! answers at once. "Open in PixelCraft" and a dropped file run Open the same way.
++use super::*;
++use pixelcraft::playground::std::{self, fs};
++use std::cell::{OnceCell, RefCell};
++use std::path::Path;
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++
++/// Memory only: files from the computer or a drop, and a save to download.
++const TMP: &str = "/tmp";
++const DOWNLOADS: &str = "/tmp/downloads";
++const OFF: &str = "Could not use this file dialog: Lua scripts, extensions and tilesheet import are off in the browser build.";
++
++/// A dialog the app asked for this frame.
++struct Ask {
++    save: bool,
++    types: Vec<String>,
++    name: String,
++}
++
++thread_local! {
++    static CTX: OnceCell<egui::Context> = const { OnceCell::new() };
++    static ASKED: RefCell<Option<Ask>> = const { RefCell::new(None) };
++    /// The menu action running this frame (set by studio_action).
++    static ACTION: RefCell<String> = const { RefCell::new(String::new()) };
++    /// What the dialog being replayed answers.
++    static ANSWER: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
++    /// Actions to run again, with the files that answer their dialog.
++    static REPLAY: RefCell<Vec<(String, Vec<PathBuf>)>> = const { RefCell::new(Vec::new()) };
++}
++
++pub(crate) fn action(name: &str) {
++    ACTION.set(name.into());
++}
++
++fn repaint() {
++    CTX.with(|c| c.get().map(egui::Context::request_repaint));
++}
++
++/// The desktop's file dialogs: on the web they ask Playground's after the frame (`Web::after`).
++pub(crate) mod rfd {
++    use super::*;
++
++    #[derive(Default)]
++    pub struct FileDialog {
++        types: Vec<String>,
++        name: String,
++    }
++
++    impl FileDialog {
++        pub fn new() -> Self {
++            Self::default()
++        }
++        pub fn add_filter(mut self, _name: impl Into<String>, extensions: &[impl ToString]) -> Self {
++            self.types.extend(extensions.iter().map(ToString::to_string));
++            self
++        }
++        pub fn set_title(self, _title: impl Into<String>) -> Self {
++            self
++        }
++        pub fn set_directory(self, _dir: impl AsRef<Path>) -> Self {
++            self
++        }
++        pub fn set_file_name(mut self, name: impl Into<String>) -> Self {
++            self.name = name.into();
++            self
++        }
++        fn ask(self, save: bool) -> Vec<PathBuf> {
++            let answer = ANSWER.take();
++            if answer.is_empty() {
++                ASKED.set(Some(Ask { save, types: self.types, name: self.name }));
++            }
++            answer
++        }
++        pub fn pick_file(self) -> Option<PathBuf> {
++            self.ask(false).into_iter().next()
++        }
++        pub fn pick_files(self) -> Option<Vec<PathBuf>> {
++            Some(self.ask(false)).filter(|a| !a.is_empty())
++        }
++        pub fn pick_folder(self) -> Option<PathBuf> {
++            self.ask(false).into_iter().next()
++        }
++        pub fn save_file(self) -> Option<PathBuf> {
++            self.ask(true).into_iter().next()
++        }
++    }
++}
++
++fn get(o: &JsValue, k: &str) -> JsValue {
++    js_sys::Reflect::get(o, &k.into()).unwrap_or(JsValue::UNDEFINED)
++}
++
++/// `playgroundFiles[method](...args)`; None when the page has none or it threw.
++fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = Some(get(&js_sys::global(), "playgroundFiles")).filter(JsValue::is_object)?;
++    let f = get(&api, method).dyn_into::<js_sys::Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++async fn wait(v: Option<JsValue>) -> Option<JsValue> {
++    let promise = v?.dyn_into::<js_sys::Promise>().ok()?;
++    wasm_bindgen_futures::JsFuture::from(promise).await.ok().filter(|v| !v.is_null() && !v.is_undefined())
++}
++
++fn options(pairs: &[(&str, JsValue)]) -> JsValue {
++    let o = js_sys::Object::new();
++    for (k, v) in pairs {
++        let _ = js_sys::Reflect::set(&o, &(*k).into(), v);
++    }
++    o.into()
++}
++
++/// A file from Files (`{ path, name, bytes }`) into memory at its path (one from the computer goes to `/tmp`).
++fn bring_in(file: &JsValue) -> Option<PathBuf> {
++    let name = get(file, "name").as_string()?;
++    let path = match get(file, "path").as_string() {
++        Some(p) => PathBuf::from(p.strip_prefix("browser:")?),
++        None => Path::new(TMP).join(Path::new(&name).file_name()?),
++    };
++    fs::put(&path, js_sys::Uint8Array::new(&get(file, "bytes")).to_vec());
++    Some(path)
++}
++
++/// Opens a file that came in ("Open in PixelCraft", a drop) as Open does.
++fn open(path: PathBuf) {
++    REPLAY.with_borrow_mut(|r| r.push(("open".into(), vec![path])));
++    repaint();
++}
++
++/// The page's app: the window, then what it asked of the page.
++pub(crate) struct Web {
++    app: PixelCraft,
++    unsaved: bool,
++}
++
++impl Web {
++    /// After the window's frame: the answers to earlier dialogs, the dialog it asked for, and what it wrote.
++    fn after(&mut self) {
++        let action = ACTION.take();
++        for (action, files) in REPLAY.take() {
++            ANSWER.set(files);
++            self.app.action(&action);
++            ANSWER.take();
++            // A file from the computer or a download has no place in Files: Save asks where.
++            if self.app.path.as_deref().is_some_and(|p| p.starts_with(TMP)) {
++                self.app.path = None;
++            }
++        }
++        if let Some(ask) = ASKED.take() {
++            // The welcome page's Open and the unsaved-changes Save run no menu action.
++            let action = match (action.as_str(), ask.save, ask.types.iter().any(|t| t == "pixel")) {
++                ("", true, _) => "save".into(),
++                ("", false, true) => "open".into(),
++                _ => action,
++            };
++            if action.is_empty() {
++                self.app.status = OFF.into();
++            } else {
++                let types = JsValue::from(ask.types.iter().map(|t| JsValue::from(t.as_str())).collect::<js_sys::Array>());
++                let asked = if ask.save {
++                    call("saveAs", &[options(&[("name", ask.name.as_str().into()), ("types", types)])])
++                } else {
++                    call("open", &[options(&[("types", types)])])
++                };
++                wasm_bindgen_futures::spawn_local(async move {
++                    let Some(answer) = wait(asked).await else { return };
++                    let files = if ask.save {
++                        match get(&answer, "path").as_string() {
++                            Some(p) => p.strip_prefix("browser:").map(PathBuf::from),
++                            None => Some(Path::new(DOWNLOADS).join(&ask.name)),
++                        }
++                        .into_iter()
++                        .collect()
++                    } else {
++                        js_sys::Array::from(&answer).iter().filter_map(|f| bring_in(&f)).collect()
++                    };
++                    REPLAY.with_borrow_mut(|r| r.push((action, files)));
++                    repaint();
++                });
++            }
++        }
++        for p in fs::changes() {
++            if p.starts_with(DOWNLOADS) {
++                if let (Ok(bytes), Some(name)) = (fs::read(&p), p.file_name()) {
++                    call("download", &[name.to_string_lossy().as_ref().into(), js_sys::Uint8Array::from(bytes.as_slice()).into()]);
++                    let _ = fs::remove_file(&p);
++                    fs::changes();
++                }
++            } else if !p.starts_with(TMP) {
++                let target = JsValue::from(format!("browser:{}", p.display()));
++                if fs::is_file(&p) {
++                    call("write", &[target, js_sys::Uint8Array::from(fs::read(&p).unwrap_or_default().as_slice()).into()]);
++                } else if !fs::exists(&p) {
++                    call("remove", &[target]);
++                }
++            }
++        }
++        if self.unsaved != self.app.dirty() {
++            self.unsaved = self.app.dirty();
++            call("setUnsaved", &[self.unsaved.into()]);
++        }
++    }
++}
++
++impl ::eframe::App for Web {
++    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
++        ::eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
++        // A dropped file is only a name on the web: its bytes are read, then it is opened as "Open in PixelCraft" is.
++        for f in std::mem::take(&mut raw_input.dropped_files) {
++            wasm_bindgen_futures::spawn_local(async move {
++                if let (Ok(bytes), Some(name)) = (f.bytes_async().await, f.path().file_name()) {
++                    let path = Path::new(TMP).join("dropped").join(name);
++                    fs::put(&path, bytes);
++                    open(path);
++                }
++            });
++        }
++    }
++
++    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut ::eframe::Frame) {
++        ::eframe::App::ui(&mut self.app, ui, frame);
++        self.after();
++        // A link opens in a new tab, as the desktop opens the browser, rather than replacing the app.
++        ui.ctx().output_mut(|o| {
++            for command in &mut o.commands {
++                if let egui::OutputCommand::OpenUrl(url) = command {
++                    url.new_tab = true;
++                }
++            }
++        });
++    }
++}
++
++/// `eframe::run_native` on the web: the app is made against the page's context, so what it starts wakes the page.
++pub fn main() {
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("PixelCraft: {info}").into())));
++    call("onOpen", &[Closure::<dyn Fn(JsValue)>::new(|file| {
++        if let Some(path) = bring_in(&file) {
++            open(path);
++        }
++    })
++    .into_js_value()]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
++        let canvas = document
++            .get_element_by_id("pixelcraft_canvas")
++            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
++            .expect("no #pixelcraft_canvas");
++        let creator = |cc: &::eframe::CreationContext<'_>| -> Result<Box<dyn ::eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
++            CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
++            Ok(Box::new(Web { app: PixelCraft::new(cc, None), unsaved: false }))
++        };
++        let runner = ::eframe::WebRunner::new();
++        let started = runner.start(canvas, ::eframe::WebOptions::default(), Box::new(creator)).await;
++        // The runner lives as long as the page.
++        std::mem::forget(runner);
++        if let Some(loading) = document.get_element_by_id("pixelcraft_loading") {
++            match started {
++                Ok(()) => loading.remove(),
++                Err(e) => loading.set_text_content(Some(&format!("PixelCraft could not start: {e:?}"))),
++            }
++        }
++    });
++}
