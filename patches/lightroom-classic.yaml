@@ -17,7 +17,7 @@
 #   `self.offload` itself (or no longer calls `self.pool.submit`). If only the line moved, re-anchor on the
 #   prefetch's pool submit.
 - file: crates/ui-egui/src/render.rs
-  find: 'self\.pool\.submit\(\s*slot,\s*key,\s*priority,\s*Box::new\(move \|\| (?:Finished \{ result: |Self::run_for\(slot, \|\| )\w+::memory::in_background\(\|\| job\.run\(\)\),[^;]*;'
+  find: 'self\.pool\.submit\(\s*slot,\s*key,\s*priority,\s*(?://[^\n]*\s*)*Box::new\(move \|\| (?:Finished \{ result: |Self::run_for\(slot, \|\| )\w+::memory::in_background\(\|\| (?:\w+::gpu::as_batch\(\|\| )?job\.run\(\)\)[^;]*;'
   replace: |-
     if self.offload.is_some() {
                 self.seq += 1;
