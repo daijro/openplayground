@@ -527,6 +527,24 @@ groups:
         accent: "#FF7A1A"
         base: "#3A1A06"
 
+      - slug: texturecraft
+        name: TextureCraft
+        alternative: Substance Painter
+        blurb: Paint PBR materials onto 3D models in layers with masks, bake mesh maps and export textures.
+        # ArtCraft's own, and it publishes a web zip with each release, so it needs no patches. Its web page has no file
+        # access yet, so there is nothing here for Files to open. SubCraft (above) is the other Substance Painter
+        # alternative here, pinned to an old commit.
+        opens: []
+        imports: []
+        repo: storytold/texturecraft
+        license: MIT OR Apache-2.0
+        copyright: "Copyright (c) 2026 ArtCraft Team and the TextureCraft contributors"
+        # What the web build compiles: docs, packaging and CI commits don't rebuild it.
+        paths: [apps, crates, assets, vendor, Cargo.toml, Cargo.lock]
+        icon: icons/texturecraft.png
+        accent: "#C8743A"
+        base: "#3A1D0B"
+
       - slug: substance-designer
         name: MaterialCraft
         alternative: Substance Designer
