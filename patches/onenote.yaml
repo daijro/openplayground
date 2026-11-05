@@ -203,7 +203,7 @@
 # The page: where it is drawn before its blocks, and the others' carets and pointers after them.
 - live: true
   file: crates/ui-egui/src/app.rs
-  find: 'let\s+(?:mut\s+)?moved\s*=\s*crate::containers::show\([^;]*\);'
+  find: 'let\s+(?:mut\s+)?moved\s*=\s*(?:crate::containers::show\(|if\s+\w+\s*\{\s*crate::containers::show)[^;]*;'
   before: "#[cfg(target_arch = \"wasm32\")] live::page_start(ui);\n                            "
   after: "\n                            #[cfg(target_arch = \"wasm32\")] live::page_end(ui, ed, &tokens);"
 # Where each block of the page starts, how wide its column is and which ui it is in (for the others' carets, and
