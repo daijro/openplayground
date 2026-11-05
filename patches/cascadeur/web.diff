@@ -1,0 +1,804 @@
+diff --git a/Trunk.toml b/Trunk.toml
+new file mode 100644
+index 0000000..256ed1e
+--- /dev/null
++++ b/Trunk.toml
+@@ -0,0 +1,13 @@
++# HumanMotionCraft in the browser, for Playground (patches/cascadeur.yaml in the Playground repository).
++# Build with: trunk build --release   (from the repository's root)
++[build]
++target = "index.html"
++public_url = "./"
++filehash = true
++dist = "target/trunk-dist"
++
++# The list of the assets folder's files, which the page fetches at start (app/web.rs).
++[[hooks]]
++stage = "post_build"
++command = "sh"
++command_arguments = ["-c", "cd \"$TRUNK_STAGING_DIR\" && find assets -type f | sort > assets.txt"]
+diff --git a/crates/ac-app/src/app/web.rs b/crates/ac-app/src/app/web.rs
+new file mode 100644
+index 0000000..a2ac7a1
+--- /dev/null
++++ b/crates/ac-app/src/app/web.rs
+@@ -0,0 +1,276 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! HumanMotionCraft in the browser, for Playground (patches/cascadeur.yaml in the Playground repository): the desktop
++//! window on the page's canvas, and its files in Playground's Files.
++//!
++//! The page loads the `assets` folder (the rig, the mannequin, the in-betweener's weights, the built-in library) into
++//! ac-playground's in-memory file system, then starts the app as the desktop does, with its preferences kept in memory
++//! (`--prefs memory`). Open project, Save project as and Import file are Playground's dialogs: the app's `rfd` calls
++//! (ac-playground) note which one they wanted and the page asks it after the frame ([`Web::after`]). A file from Files
++//! ("Open in HumanMotionCraft"), from an answer to Open, or dropped on the page comes in as a file dropped on the
++//! window, as the desktop takes one. Whatever the app writes outside `/tmp` (a saved project, an exported `.glb`; Export
++//! starts in `/Documents`) goes to Files after the frame, and a project saved to download is handed to the browser.
++//! AI in-betweening and the physics solver run on the page's one thread, in the frame (the app's own fallback for an AI
++//! worker thread that can't start).
++use std::cell::{OnceCell, RefCell};
++use std::future::Future;
++use std::path::{Path, PathBuf};
++use std::pin::Pin;
++use std::sync::Arc;
++
++use ac_playground::std::{self, fs};
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++
++use super::App;
++use crate::Args;
++
++/// Where the page puts the app's `assets` folder.
++const ASSETS: &str = "/assets";
++/// Where the Export dialog starts (`files::documents`): this folder goes to Files.
++const DOCUMENTS: &str = "/Documents";
++/// Memory only: files from the computer or a drop, and a project saved to download.
++const TMP: &str = "/tmp";
++const OPENED_FROM: &str = "/tmp/Opened";
++const DOWNLOADS: &str = "/tmp/Downloads";
++
++thread_local! {
++    static CTX: OnceCell<egui::Context> = const { OnceCell::new() };
++    /// Files that came in (an answer to Open, "Open in", a drop), for the next frame.
++    static OPENED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
++    /// Where Save project as… put the project (and whether it is a download), for the next frame.
++    static SAVED: RefCell<Vec<(PathBuf, bool)>> = const { RefCell::new(Vec::new()) };
++}
++
++fn repaint() {
++    CTX.with(|c| c.get().map(egui::Context::request_repaint));
++}
++
++fn get(o: &JsValue, k: &str) -> JsValue {
++    js_sys::Reflect::get(o, &k.into()).unwrap_or(JsValue::UNDEFINED)
++}
++
++/// `playgroundFiles[method](...args)`; None when the page has none or it threw.
++fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = Some(get(&js_sys::global(), "playgroundFiles")).filter(JsValue::is_object)?;
++    let f = get(&api, method).dyn_into::<js_sys::Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++async fn wait(v: Option<JsValue>) -> Option<JsValue> {
++    let promise = v?.dyn_into::<js_sys::Promise>().ok()?;
++    wasm_bindgen_futures::JsFuture::from(promise).await.ok().filter(|v| !v.is_null() && !v.is_undefined())
++}
++
++fn options(pairs: &[(&str, JsValue)]) -> JsValue {
++    let o = js_sys::Object::new();
++    for (k, v) in pairs {
++        let _ = js_sys::Reflect::set(&o, &(*k).into(), v);
++    }
++    o.into()
++}
++
++fn json_types() -> JsValue {
++    js_sys::Array::of1(&"json".into()).into()
++}
++
++/// A file from Files (`{ path, name, bytes }`) into memory at its path (one from the computer goes to `/tmp`).
++fn bring_in(file: JsValue) {
++    let (Some(name), bytes) = (get(&file, "name").as_string(), js_sys::Uint8Array::new(&get(&file, "bytes")).to_vec()) else {
++        return;
++    };
++    let from = get(&file, "path").as_string().and_then(|p| p.strip_prefix("browser:").map(PathBuf::from));
++    let Some(file_name) = Path::new(&name).file_name() else { return };
++    let path = from.unwrap_or_else(|| Path::new(OPENED_FROM).join(file_name));
++    fs::put(&path, bytes);
++    OPENED.with_borrow_mut(|o| o.push(path));
++    repaint();
++}
++
++/// A file the page put in memory, handed to the window as a dropped one.
++#[derive(Debug)]
++struct Injected(PathBuf);
++
++impl egui::DroppedFile for Injected {
++    fn path(&self) -> &Path {
++        &self.0
++    }
++    fn bytes_async(&self) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + '_>> {
++        Box::pin(async move { fs::read(&self.0).map_err(|e| e.to_string()) })
++    }
++}
++
++/// What the page's Files should hold of what the app wrote: not the library, the preferences and the recovery files it
++/// keeps under `/tmp`.
++fn mirrored(p: &Path) -> bool {
++    !p.starts_with(TMP) && !p.starts_with(ASSETS)
++}
++
++/// The page's app: the window, then what it asked of the page.
++struct Web {
++    app: App,
++    unsaved: bool,
++}
++
++impl Web {
++    /// After the window's frame: the project to save, the dialog it asked for, and what it wrote.
++    fn after(&mut self) {
++        for (path, download) in SAVED.take() {
++            // "Download to device": written in memory first, then handed to the browser (below); the next Save asks again.
++            if self.app.save_project(Some(path)) && download {
++                self.app.session.document.project = None;
++            }
++        }
++        if let Some(ask) = ac_playground::take_ask() {
++            match (ask.title.as_str(), ask.save) {
++                ("Open project" | "Import animations and poses", false) => {
++                    let asked = call("open", &[options(&[("types", json_types())])]);
++                    wasm_bindgen_futures::spawn_local(async move {
++                        if let Some(file) = wait(asked).await.and_then(|p| js_sys::Array::from(&p).iter().next()) {
++                            bring_in(file);
++                        }
++                    });
++                }
++                ("Save project", true) => {
++                    let name = ask.name.unwrap_or_else(|| "untitled.project.json".into());
++                    let asked = call("saveAs", &[options(&[("name", name.as_str().into()), ("types", json_types())])]);
++                    wasm_bindgen_futures::spawn_local(async move {
++                        let Some(answer) = wait(asked).await else { return };
++                        let (path, download) = match get(&answer, "path").as_string() {
++                            Some(p) => (p.strip_prefix("browser:").map(PathBuf::from), false),
++                            None => (Some(Path::new(DOWNLOADS).join(&name)), true),
++                        };
++                        if let Some(mut path) = path {
++                            if !path.to_string_lossy().to_ascii_lowercase().ends_with(".json") {
++                                path = PathBuf::from(format!("{}{}", path.display(), ac_io::project::EXT));
++                            }
++                            SAVED.with_borrow_mut(|s| s.push((path, download)));
++                            repaint();
++                        }
++                    });
++                }
++                _ => self.app.status = format!("{}: not in the browser version", ask.title),
++            }
++        }
++        for p in fs::changes() {
++            if p.starts_with(DOWNLOADS) {
++                if let (Ok(bytes), Some(name)) = (fs::read(&p), p.file_name()) {
++                    call("download", &[name.to_string_lossy().as_ref().into(), js_sys::Uint8Array::from(bytes.as_slice()).into()]);
++                    let _ = fs::remove_file(&p);
++                    fs::changes();
++                }
++            } else if mirrored(&p) {
++                let target = JsValue::from(format!("browser:{}", p.display()));
++                if fs::is_file(&p) {
++                    call("write", &[target, js_sys::Uint8Array::from(fs::read(&p).unwrap_or_default().as_slice()).into()]);
++                } else if !fs::exists(&p) {
++                    call("remove", &[target]);
++                }
++            }
++        }
++        let unsaved = self.app.session.document.unsaved();
++        if self.unsaved != unsaved {
++            self.unsaved = unsaved;
++            call("setUnsaved", &[unsaved.into()]);
++        }
++    }
++}
++
++impl ::eframe::App for Web {
++    fn logic(&mut self, ctx: &egui::Context, frame: &mut ::eframe::Frame) {
++        ::eframe::App::logic(&mut self.app, ctx, frame);
++    }
++
++    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
++        ::eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
++        // A dropped file is only a name on the web: its bytes are read, and it is dropped again from memory.
++        for f in std::mem::take(&mut raw_input.dropped_files) {
++            wasm_bindgen_futures::spawn_local(async move {
++                if let (Ok(bytes), Some(name)) = (f.bytes_async().await, f.path().file_name()) {
++                    let path = Path::new(OPENED_FROM).join(name);
++                    fs::put(&path, bytes);
++                    OPENED.with_borrow_mut(|o| o.push(path));
++                    repaint();
++                }
++            });
++        }
++        raw_input.dropped_files.extend(OPENED.take().into_iter().map(|p| Arc::new(Injected(p)) as egui::DroppedFileHandle));
++    }
++
++    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut ::eframe::Frame) {
++        ::eframe::App::ui(&mut self.app, ui, frame);
++        self.after();
++        // A link opens in a new tab, as the desktop opens the browser, rather than replacing the app.
++        ui.ctx().output_mut(|o| {
++            for command in &mut o.commands {
++                if let egui::OutputCommand::OpenUrl(url) = command {
++                    url.new_tab = true;
++                }
++            }
++        });
++    }
++}
++
++/// Every file of `assets.txt` (the build lists them, one per line, relative to the page), fetched at once.
++async fn load_assets() -> Result<(), JsValue> {
++    let window = web_sys::window().ok_or("no window")?;
++    let text = |r: JsValue| -> Result<web_sys::Response, JsValue> {
++        let r: web_sys::Response = r.dyn_into()?;
++        if r.ok() { Ok(r) } else { Err(format!("{} {}", r.status(), r.url()).into()) }
++    };
++    let list = text(wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("assets.txt")).await?)?;
++    let list = wasm_bindgen_futures::JsFuture::from(list.text()?).await?.as_string().unwrap_or_default();
++    let names: Vec<&str> = list.lines().filter(|l| !l.is_empty()).collect();
++    let fetches = js_sys::Array::new();
++    for name in &names {
++        fetches.push(&window.fetch_with_str(name));
++    }
++    let responses = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::all(&fetches)).await?;
++    let buffers = js_sys::Array::new();
++    for r in js_sys::Array::from(&responses).iter() {
++        buffers.push(&text(r)?.array_buffer()?.into());
++    }
++    let bodies = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::all(&buffers)).await?;
++    for (name, body) in names.iter().zip(js_sys::Array::from(&bodies).iter()) {
++        fs::put(&Path::new("/").join(name), js_sys::Uint8Array::new(&body).to_vec());
++    }
++    Ok(())
++}
++
++/// The desktop's `main` on the page: load the assets, then start the app on the canvas.
++pub fn main() {
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("HumanMotionCraft: {info}").into())));
++    wasm_bindgen_futures::spawn_local(async {
++        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
++        let loading = document.get_element_by_id("hmc_loading");
++        let said = |text: &str| loading.as_ref().map(|l| l.set_text_content(Some(text)));
++        if let Err(e) = load_assets().await {
++            said(&format!("HumanMotionCraft could not load its assets: {e:?}"));
++            return;
++        }
++        let _ = fs::create_dir_all(DOCUMENTS);
++        let canvas = document
++            .get_element_by_id("hmc_canvas")
++            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
++            .expect("no #hmc_canvas");
++        call("onOpen", &[Closure::<dyn Fn(JsValue)>::new(bring_in).into_js_value()]);
++        let creator = move |cc: &::eframe::CreationContext<'_>| -> Result<Box<dyn ::eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
++            CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
++            let args = Args { assets: Some(ASSETS.into()), prefs: Some("memory".into()), ..Default::default() };
++            Ok(Box::new(Web { app: App::new(cc, args)?, unsaved: false }))
++        };
++        let mut web_options = ::eframe::WebOptions::default();
++        // The mannequin's skinning reads storage buffers in the vertex stage, which WebGL2 has none of: WebGPU only.
++        if let ::eframe::egui_wgpu::WgpuSetup::CreateNew(c) = &mut web_options.wgpu_options.wgpu_setup {
++            c.instance_descriptor.backends = ::eframe::egui_wgpu::wgpu::Backends::BROWSER_WEBGPU;
++        }
++        let runner = ::eframe::WebRunner::new();
++        let started = runner.start(canvas, web_options, Box::new(creator)).await;
++        // The runner lives as long as the page.
++        std::mem::forget(runner);
++        match started {
++            Ok(()) => loading.iter().for_each(|l| l.remove()),
++            Err(e) => {
++                said(&format!("HumanMotionCraft could not start: {e:?}"));
++            }
++        }
++    });
++}
+diff --git a/crates/ac-playground/Cargo.toml b/crates/ac-playground/Cargo.toml
+new file mode 100644
+index 0000000..9950192
+--- /dev/null
++++ b/crates/ac-playground/Cargo.toml
+@@ -0,0 +1,16 @@
++# Playground's browser build of HumanMotionCraft (patches/cascadeur.yaml in the Playground repository): what
++# wasm32-unknown-unknown lacks, as std, craft_atomic and craft_settings stand-ins. Native builds compile it empty.
++[package]
++name = "ac-playground"
++description = "HumanMotionCraft in the browser: the clock, files and settings std and craft-libs lack on wasm32-unknown-unknown"
++version.workspace = true
++edition.workspace = true
++rust-version.workspace = true
++license.workspace = true
++publish.workspace = true
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++web-time = "1"
++
++[lints]
++workspace = true
+diff --git a/crates/ac-playground/src/lib.rs b/crates/ac-playground/src/lib.rs
+new file mode 100644
+index 0000000..f732ce1
+--- /dev/null
++++ b/crates/ac-playground/src/lib.rs
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! HumanMotionCraft in the browser, for Playground (patches/cascadeur.yaml in the Playground repository).
++//!
++//! wasm32-unknown-unknown has no clock and no files: `Instant::now` panics and every file call fails. The modules that
++//! use them take `std` from here instead, through one `#[cfg(target_arch = "wasm32")] use ac_playground::std;` line at
++//! each one's end (a local `std` shadows the standard library's name in that module; everything else in it still
++//! comes from the real std):
++//!   time     web-time's Instant and SystemTime;
++//!   fs       an in-memory file system (the assets, the library, projects, exports), each change noted for the page
++//!            to mirror to Playground's Files; `exists`, `is_dir` and `is_file` stand in for the `Path` methods of
++//!            those names, which ask the real one.
++//! And three crates' stand-ins (stand_ins.rs), which Cargo.toml hands to the app under those crates' names (a dependency
++//! with `package = "ac-playground"`, so their `use` lines stay as they are): `atomic_write` into that file system
++//! (craft-atomic), the preferences kept for the page (craft-settings: the real store reads the clock and a folder on
++//! disk), and the file dialogs (rfd: a page can't wait for one, so a dialog notes what it asked for and answers
++//! nothing; see `take_ask`).
++#![cfg(target_arch = "wasm32")]
++
++mod stand_ins;
++pub use stand_ins::*;
++
++/// `exists`, `is_dir` and `is_file` on a `PathBuf` (or a reference to one, which is what `join` and a directory entry
++/// give), asking the in-memory file system: the real `Path` methods of those names ask the real one, which has no files
++/// here. Importing this trait next to [`std`] shadows them where the receiver is a `PathBuf`, as a method on `&PathBuf`
++/// is found before one on `&Path`; the call sites stay as they are.
++pub trait PathExt {
++    fn exists(self) -> bool;
++    fn is_dir(self) -> bool;
++    fn is_file(self) -> bool;
++}
++
++impl PathExt for &::std::path::PathBuf {
++    fn exists(self) -> bool {
++        std::fs::exists(self)
++    }
++    fn is_dir(self) -> bool {
++        std::fs::is_dir(self)
++    }
++    fn is_file(self) -> bool {
++        std::fs::is_file(self)
++    }
++}
++
++pub mod std {
++    pub use ::std::*;
++
++    pub mod time {
++        pub use web_time::*;
++    }
++
++    pub mod env {
++        pub use ::std::env::*;
++
++        /// std's panics on a page.
++        pub fn temp_dir() -> ::std::path::PathBuf {
++            "/tmp".into()
++        }
++    }
++
++    pub mod fs {
++        // What isn't here (OpenOptions, set_permissions, ...) is std's, which fails on a page.
++        pub use ::std::fs::*;
++        use ::std::cell::RefCell;
++        use ::std::collections::{BTreeMap, BTreeSet};
++        use ::std::io;
++        use ::std::path::{Component, Path, PathBuf};
++        use web_time::SystemTime;
++
++        enum Entry {
++            Dir(SystemTime),
++            File(Vec<u8>, SystemTime),
++        }
++
++        #[derive(Default)]
++        struct Tree {
++            entries: BTreeMap<PathBuf, Entry>,
++            /// Paths written, created or removed since the last [`changes`].
++            changed: BTreeSet<PathBuf>,
++        }
++
++        thread_local! {
++            static TREE: RefCell<Tree> = RefCell::default();
++        }
++
++        fn with<T>(f: impl FnOnce(&mut Tree) -> T) -> T {
++            TREE.with(|t| f(&mut t.borrow_mut()))
++        }
++
++        /// `/a/./b/../c` -> `/a/c`: one spelling per file (relative paths start at `/`).
++        pub fn key(p: &Path) -> PathBuf {
++            let mut out = PathBuf::from("/");
++            for c in p.components() {
++                match c {
++                    Component::ParentDir => {
++                        out.pop();
++                    }
++                    Component::Normal(n) => out.push(n),
++                    _ => {}
++                }
++            }
++            out
++        }
++
++        fn missing(p: &Path) -> io::Error {
++            io::Error::new(io::ErrorKind::NotFound, format!("{} does not exist", p.display()))
++        }
++
++        impl Tree {
++            fn parents(&mut self, p: &Path) {
++                for dir in p.ancestors().skip(1) {
++                    self.entries.entry(dir.to_path_buf()).or_insert_with(|| Entry::Dir(SystemTime::now()));
++                }
++            }
++            fn put(&mut self, p: PathBuf, bytes: Vec<u8>) {
++                self.parents(&p);
++                self.entries.insert(p, Entry::File(bytes, SystemTime::now()));
++            }
++            /// `p` and everything below it.
++            fn below(&self, p: &Path) -> Vec<PathBuf> {
++                self.entries.range(p.to_path_buf()..).map(|(k, _)| k).take_while(|k| k.starts_with(p)).cloned().collect()
++            }
++        }
++
++        /// Stores a file without noting a change (the assets, and files the page brings in from Files or a drop).
++        pub fn put(p: &Path, bytes: Vec<u8>) {
++            with(|t| t.put(key(p), bytes));
++        }
++
++        /// The paths changed since the last call: each now holds what the page's storage should hold, or is gone.
++        pub fn changes() -> Vec<PathBuf> {
++            with(|t| ::std::mem::take(&mut t.changed).into_iter().collect())
++        }
++
++        pub fn exists<P: AsRef<Path>>(p: P) -> bool {
++            TREE.with(|t| t.borrow().entries.contains_key(&key(p.as_ref())))
++        }
++
++        pub fn is_file<P: AsRef<Path>>(p: P) -> bool {
++            TREE.with(|t| matches!(t.borrow().entries.get(&key(p.as_ref())), Some(Entry::File(..))))
++        }
++
++        pub fn is_dir<P: AsRef<Path>>(p: P) -> bool {
++            TREE.with(|t| matches!(t.borrow().entries.get(&key(p.as_ref())), Some(Entry::Dir(_))))
++        }
++
++        pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(p: P, bytes: C) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                t.put(p.clone(), bytes.as_ref().to_vec());
++                t.changed.insert(p);
++            });
++            Ok(())
++        }
++
++        pub fn read<P: AsRef<Path>>(p: P) -> io::Result<Vec<u8>> {
++            TREE.with(|t| match t.borrow().entries.get(&key(p.as_ref())) {
++                Some(Entry::File(bytes, _)) => Ok(bytes.clone()),
++                _ => Err(missing(p.as_ref())),
++            })
++        }
++
++        pub fn read_to_string<P: AsRef<Path>>(p: P) -> io::Result<String> {
++            String::from_utf8(read(p)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
++        }
++
++        pub fn create_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                t.parents(&p);
++                t.entries.entry(p).or_insert_with(|| Entry::Dir(SystemTime::now()));
++            });
++            Ok(())
++        }
++
++        pub fn remove_file<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| match t.entries.remove(&p) {
++                Some(Entry::File(..)) => {
++                    t.changed.insert(p);
++                    Ok(())
++                }
++                _ => Err(missing(&p)),
++            })
++        }
++
++        pub fn remove_dir<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                if t.below(&p).len() > 1 {
++                    return Err(io::Error::other(format!("{} is not empty", p.display())));
++                }
++                t.entries.remove(&p).map(|_| ()).ok_or_else(|| missing(&p))
++            })
++        }
++
++        pub fn remove_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                for gone in t.below(&p) {
++                    t.entries.remove(&gone);
++                    t.changed.insert(gone);
++                }
++            });
++            Ok(())
++        }
++
++        /// A file, or a folder with everything in it, under a new name.
++        pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
++            let (from, to) = (key(from.as_ref()), key(to.as_ref()));
++            with(|t| {
++                let moved = t.below(&from);
++                if moved.is_empty() {
++                    return Err(missing(&from));
++                }
++                t.parents(&to);
++                for old in moved {
++                    if let Some(entry) = t.entries.remove(&old) {
++                        let new = to.join(old.strip_prefix(&from).unwrap_or(&old));
++                        t.entries.insert(new.clone(), entry);
++                        t.changed.insert(old);
++                        t.changed.insert(new);
++                    }
++                }
++                Ok(())
++            })
++        }
++
++        pub fn canonicalize<P: AsRef<Path>>(p: P) -> io::Result<PathBuf> {
++            Ok(key(p.as_ref()))
++        }
++
++        #[derive(Clone, Copy)]
++        pub struct FileType(bool);
++        impl FileType {
++            pub fn is_dir(&self) -> bool {
++                self.0
++            }
++            pub fn is_file(&self) -> bool {
++                !self.0
++            }
++            pub fn is_symlink(&self) -> bool {
++                false
++            }
++        }
++
++        #[derive(Clone)]
++        pub struct Metadata {
++            dir: bool,
++            len: u64,
++            modified: SystemTime,
++        }
++        impl Metadata {
++            pub fn len(&self) -> u64 {
++                self.len
++            }
++            pub fn is_dir(&self) -> bool {
++                self.dir
++            }
++            pub fn is_file(&self) -> bool {
++                !self.dir
++            }
++            pub fn file_type(&self) -> FileType {
++                FileType(self.dir)
++            }
++            pub fn modified(&self) -> io::Result<SystemTime> {
++                Ok(self.modified)
++            }
++        }
++
++        pub fn metadata<P: AsRef<Path>>(p: P) -> io::Result<Metadata> {
++            TREE.with(|t| match t.borrow().entries.get(&key(p.as_ref())) {
++                Some(Entry::Dir(modified)) => Ok(Metadata { dir: true, len: 0, modified: *modified }),
++                Some(Entry::File(bytes, modified)) => Ok(Metadata { dir: false, len: bytes.len() as u64, modified: *modified }),
++                None => Err(missing(p.as_ref())),
++            })
++        }
++
++        pub struct DirEntry(PathBuf);
++        impl DirEntry {
++            pub fn path(&self) -> PathBuf {
++                self.0.clone()
++            }
++            pub fn file_name(&self) -> ::std::ffi::OsString {
++                self.0.file_name().unwrap_or_default().to_owned()
++            }
++            pub fn metadata(&self) -> io::Result<Metadata> {
++                metadata(&self.0)
++            }
++            pub fn file_type(&self) -> io::Result<FileType> {
++                metadata(&self.0).map(|m| m.file_type())
++            }
++        }
++
++        pub fn read_dir<P: AsRef<Path>>(p: P) -> io::Result<::std::vec::IntoIter<io::Result<DirEntry>>> {
++            let dir = key(p.as_ref());
++            if !is_dir(&dir) {
++                return Err(missing(&dir));
++            }
++            let entries = TREE.with(|t| {
++                t.borrow().below(&dir).into_iter().filter(|k| k.parent() == Some(&dir)).map(|k| Ok(DirEntry(k))).collect::<Vec<_>>()
++            });
++            Ok(entries.into_iter())
++        }
++    }
++}
+diff --git a/crates/ac-playground/src/stand_ins.rs b/crates/ac-playground/src/stand_ins.rs
+new file mode 100644
+index 0000000..a5f406c
+--- /dev/null
++++ b/crates/ac-playground/src/stand_ins.rs
+@@ -0,0 +1,137 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! The three crates' stand-ins (see lib.rs), each as the app uses it.
++use ::std::cell::RefCell;
++use ::std::path::{Path, PathBuf};
++use web_time::Instant;
++
++// craft-atomic
++
++/// A write is all-or-nothing in memory already.
++pub fn atomic_write(path: &Path, bytes: &[u8]) -> ::std::io::Result<()> {
++    crate::std::fs::write(path, bytes)
++}
++
++// craft-settings
++
++pub trait Settings: Default + Clone + PartialEq {
++    const APP_ID: &'static str;
++    const SCHEMA_VERSION: u32;
++}
++
++pub enum Location {
++    Auto,
++    Memory,
++    Dir(PathBuf),
++}
++
++#[derive(Debug)]
++pub enum SaveStatus {
++    Idle,
++    Failed(String),
++}
++
++pub struct TickResult {
++    pub status: SaveStatus,
++    pub next_deadline: Option<Instant>,
++}
++
++#[derive(Default)]
++pub struct OpenReport {
++    pub broken_moved_to: Option<PathBuf>,
++    pub section_errors: Vec<String>,
++    pub read_only: Option<String>,
++}
++
++pub struct SettingsStore<T>(T);
++
++impl<T: Settings> SettingsStore<T> {
++    pub fn open(_location: Location) -> (Self, OpenReport) {
++        (Self(T::default()), OpenReport::default())
++    }
++    pub fn get(&self) -> &T {
++        &self.0
++    }
++    pub fn update(&mut self, f: impl FnOnce(&mut T)) -> bool {
++        let mut next = self.0.clone();
++        f(&mut next);
++        let changed = next != self.0;
++        self.0 = next;
++        changed
++    }
++    pub fn path(&self) -> Option<PathBuf> {
++        None
++    }
++    pub fn tick(&mut self, _now: Instant) -> TickResult {
++        TickResult { status: SaveStatus::Idle, next_deadline: None }
++    }
++    pub fn flush(&mut self) -> Result<(), String> {
++        Ok(())
++    }
++}
++
++// rfd
++
++/// A dialog the app asked for: the page shows Playground's instead, after the frame.
++#[derive(Default)]
++pub struct Ask {
++    pub title: String,
++    /// Extensions, without dots.
++    pub extensions: Vec<String>,
++    /// Save dialogs: the name offered.
++    pub name: Option<String>,
++    pub save: bool,
++    pub folder: bool,
++    pub several: bool,
++}
++
++thread_local! {
++    static ASKED: RefCell<Option<Ask>> = const { RefCell::new(None) };
++}
++
++/// The dialog the app asked for since the last call.
++pub fn take_ask() -> Option<Ask> {
++    ASKED.take()
++}
++
++#[derive(Default)]
++pub struct FileDialog(Ask);
++
++impl FileDialog {
++    pub fn new() -> Self {
++        Self::default()
++    }
++    pub fn add_filter(mut self, _name: impl Into<String>, extensions: &[impl ToString]) -> Self {
++        self.0.extensions.extend(extensions.iter().map(ToString::to_string));
++        self
++    }
++    pub fn set_title(mut self, title: impl Into<String>) -> Self {
++        self.0.title = title.into();
++        self
++    }
++    pub fn set_file_name(mut self, name: impl Into<String>) -> Self {
++        self.0.name = Some(name.into());
++        self
++    }
++    pub fn set_directory(self, _dir: impl AsRef<Path>) -> Self {
++        self
++    }
++    fn ask(self, save: bool, folder: bool, several: bool) {
++        ASKED.set(Some(Ask { save, folder, several, ..self.0 }));
++    }
++    pub fn pick_file(self) -> Option<PathBuf> {
++        self.ask(false, false, false);
++        None
++    }
++    pub fn pick_files(self) -> Option<Vec<PathBuf>> {
++        self.ask(false, false, true);
++        None
++    }
++    pub fn pick_folder(self) -> Option<PathBuf> {
++        self.ask(false, true, false);
++        None
++    }
++    pub fn save_file(self) -> Option<PathBuf> {
++        self.ask(true, false, false);
++        None
++    }
++}
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..c55a2dc
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,21 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>HumanMotionCraft</title>
++  <!-- HumanMotionCraft in the browser, for Playground (patches/cascadeur.yaml in the Playground repository). -->
++  <link data-trunk rel="rust" href="crates/ac-app/Cargo.toml" data-bin="humanmotioncraft" data-wasm-opt="0" />
++  <link data-trunk rel="copy-dir" href="assets" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1b1d21; }
++    #hmc_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
++    #hmc_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #dcdee2; font: 14px system-ui, sans-serif; pointer-events: none; }
++  </style>
++</head>
++<body>
++  <canvas id="hmc_canvas"></canvas>
++  <div id="hmc_loading">Loading HumanMotionCraft&hellip;</div>
++</body>
++</html>

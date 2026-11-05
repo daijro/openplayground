@@ -1,0 +1,115 @@
+# HumanMotionCraft in the browser. Upstream (github.com/YalKouassi/HumanMotionCraft) releases a Windows portable zip only,
+# no web build; these patches add the one Playground serves, from its head commit.
+#
+# patches/cascadeur/web.diff adds new files only:
+#   index.html, Trunk.toml        the web build at the repository's root: trunk builds the app's `humanmotioncraft` binary,
+#                                 copies the `assets` folder next to it and lists its files in assets.txt.
+#   crates/ac-playground/         what wasm32-unknown-unknown lacks: `std` with web-time's clock, an in-memory file system and
+#                                 the temporary folder; the stand-ins for craft-atomic (a write is a write in memory) and
+#                                 craft-settings (its store reads the clock and a folder on disk, so the page's preferences
+#                                 are kept in memory); the file dialogs (rfd); and `PathExt`, `exists`/`is_dir`/`is_file`
+#                                 for a `PathBuf`, which the real `Path` methods answer from the real file system.
+#   crates/ac-app/src/app/web.rs  the page's side: it fetches the assets into that file system, starts the app on the canvas
+#                                 (`humanmotioncraft --prefs memory --assets /assets`), and connects Files: Open project,
+#                                 Save project as and Import file are Playground's dialogs (the app's `rfd` calls note
+#                                 what they wanted, the page asks after the frame); "Open in", an answer to Open and a file
+#                                 dropped on the page come in as a file dropped on the window, as the desktop takes one;
+#                                 what the app writes outside /tmp (a saved project, an exported .glb: Export starts in
+#                                 /Documents) goes to Files after the frame, and a project saved to download is handed to
+#                                 the browser once written.
+# The modules that use the clock or files take `std` (and `craft_atomic`, `craft_settings`, `rfd`, `PathExt`) from
+# ac-playground through ONE `use` line at their end: a local `std` shadows the standard library's name in that module, and
+# everything else in it still comes from the real std. Native builds see none of this: every rule adds wasm-only lines.
+#
+# Threads. A page has one. The AI in-betweener's worker (panels/ai_worker.rs) can't start there, and the app's own fallback for
+# that, working the preview out in the frame, is what runs: the physics solver and the in-betweener run on the page's thread,
+# in the frame. Measured in Chromium on an RTX 4090: posing with IK and physics holds the display's 120 fps (frames 8.3 ms,
+# one 42 ms hitch in 3 s), and one in-between of a 44-frame gap is a 67 ms frame (a 12-frame one, 34 ms). On SwiftShader
+# (a software GPU) posing runs at about 11 fps (frames 90 ms) and that in-between is one 224 ms frame.
+# The page needs WebGPU: the mannequin's skinning reads storage buffers in the vertex stage, which WebGL2 has none of
+# (web.rs asks for the WebGPU backend only, so another browser says it could not start rather than panicking).
+# Weight: the wasm is 15 MB (5.6 MB gzipped, one file); the assets folder (rig, mannequin, the in-betweener's 19 MB weights,
+# the built-in library) is 47 MB, 23 MB gzipped, fetched at start in parallel, as the desktop reads it all at start.
+# Off: the optional text-to-motion and pose-fill helper processes (Motion from text, Pose fill: they say there is no data
+# folder), the community (it says it isn't connected), library thumbnails and picture/video/sheet export (the headless
+# renderer waits on the GPU, which a page can't do, and video needs ffmpeg), importing a folder (a library or FBX) and choosing
+# a folder, the control port, MCP and the CLI. Preferences, the library you build up and recovery files live for the page
+# (what Export and Save project as write goes to Files). An FBX/GLB character import and the keyboard-shortcut files
+# aren't connected to Files either.
+
+# The community needs ureq (rustls, ring: no wasm32 build), so its server is native-only; the browser gets a stub.
+# The dependencies the page adds are wasm-only: ac-playground, wgpu with its WebGPU backend, and the web-sys classes it uses.
+- file: crates/ac-community/Cargo.toml
+  find: '^ureq = \"3\"\n'
+  replace: ""
+- file: crates/ac-community/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\nureq = \"3\"\n"
+- file: crates/ac-community/src/lib.rs
+  find: '^pub mod http;\n'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\npub mod http;\n#[cfg(target_arch = \"wasm32\")]\npub mod http {\n    pub fn connect(_dir: std::path::PathBuf) {}\n    pub fn get_bytes(_url: &str) -> Result<Vec<u8>, String> {\n        Err(\"the community is not connected in the browser\".into())\n    }\n}\n"
+- file: crates/ac-app/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nac-playground = { path = \"../ac-playground\" }\nwgpu = { version = \"30\", features = [\"webgpu\", \"webgl\"] }\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"Element\", \"HtmlCanvasElement\", \"Response\", \"console\"] }\n"
+- file: crates/ac-io/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nac-playground = { path = \"../ac-playground\" }\n"
+- file: crates/ac-ai/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nac-playground = { path = \"../ac-playground\" }\n"
+# `humanmotioncraft` starts the page on wasm (app/web.rs); the desktop `main` stays native. So does ac-review (a developer tool), which
+# the workspace check builds too.
+- file: crates/ac-app/src/main.rs
+  find: '^fn main\(\) -> std::process::ExitCode \{'
+  replace: "#[cfg(target_arch = \"wasm32\")]\nfn main() {\n    app::web::main()\n}\n\n#[cfg(not(target_arch = \"wasm32\"))]\nfn main() -> std::process::ExitCode {"
+- file: crates/ac-review/src/main.rs
+  find: '^fn main\(\) -> std::process::ExitCode \{'
+  replace: "#[cfg(target_arch = \"wasm32\")]\nfn main() {}\n\n#[cfg(not(target_arch = \"wasm32\"))]\nfn main() -> std::process::ExitCode {"
+- file: crates/ac-app/src/app.rs
+  find: '^mod viewport;\n'
+  after: "#[cfg(target_arch = \"wasm32\")]\npub mod web;\n"
+# The modules that read the clock or files (and the craft_atomic, craft_settings and rfd calls in them; see above).
+- {file: crates/ac-io/src/library.rs, find: &end_atomic '(?![\s\S])', after: &atomic "\n// Playground's browser build (patches/cascadeur.yaml).\n#[cfg(target_arch = \"wasm32\")] use ac_playground::{self as craft_atomic, std, PathExt};\n"}
+- {file: crates/ac-io/src/import.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/project.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/setup.rs, find: &end_std '(?![\s\S])', after: &std "\n// Playground's browser build (patches/cascadeur.yaml).\n#[cfg(target_arch = \"wasm32\")] use ac_playground::{std, PathExt};\n"}
+- {file: crates/ac-io/src/builtins.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/recovery.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/anchorlib.rs, find: *end_std, after: *std}
+- {file: crates/ac-io/src/find.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/commands.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/export.rs, find: *end_atomic, after: *atomic}
+- {file: crates/ac-io/src/reload.rs, find: *end_std, after: *std}
+- {file: crates/ac-ai/src/lib.rs, find: *end_std, after: *std}
+- {file: crates/ac-ai/src/net.rs, find: *end_std, after: *std}
+- {file: crates/ac-ai/src/models.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/files/autosave.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/files/mod.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/files/state.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/files/watch.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/library.rs, find: &end_rfd '(?![\s\S])', after: &rfd "\n// Playground's browser build (patches/cascadeur.yaml).\n#[cfg(target_arch = \"wasm32\")] use ac_playground::{self as rfd, std, PathExt};\n"}
+- {file: crates/ac-app/src/app/library/menu.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/panels/ai.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/panels/ai_worker.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/shell/mod.rs, find: &end_settings '(?![\s\S])', after: &settings "\n// Playground's browser build (patches/cascadeur.yaml).\n#[cfg(target_arch = \"wasm32\")] use ac_playground::{self as craft_settings, std, PathExt};\n"}
+- {file: crates/ac-app/src/app/shell/perf.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/shell/status.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/community/mod.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/community/captcha.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/save.rs, find: *end_std, after: *std}
+- {file: crates/ac-app/src/app/prefs.rs, find: *end_settings, after: *settings}
+- {file: crates/ac-app/src/app/files/drop.rs, find: *end_rfd, after: *rfd}
+- {file: crates/ac-app/src/app/shell/keys.rs, find: *end_rfd, after: *rfd}
+- {file: crates/ac-app/src/app/files/export.rs, find: *end_rfd, after: *rfd}
+- {file: crates/ac-app/src/app/shell/settings.rs, find: *end_rfd, after: *rfd}
+- {file: crates/ac-app/src/app/files/preview.rs, find: *end_rfd, after: *rfd}
+- {file: crates/ac-app/src/app/files/project.rs, find: *end_rfd, after: *rfd}
+# Other wasm-only lines: the Export dialog starts in /Documents (Files), and library thumbnails and agent pictures are
+# made by a headless renderer that waits on the GPU, so they say they are not made here.
+- file: crates/ac-app/src/app/files/mod.rs
+  find: '^pub fn documents\(\) -> PathBuf \{\n'
+  after: "    #[cfg(target_arch = \"wasm32\")]\n    if true {\n        return PathBuf::from(\"/Documents\");\n    }\n"
+- file: crates/ac-app/src/app.rs
+  find: '^    fn ensure_offscreen\(&mut self\) -> Result<\(\), String> \{\n'
+  after: "        #[cfg(target_arch = \"wasm32\")]\n        if true {\n            return Err(\"pictures are not made in the browser\".into());\n        }\n"

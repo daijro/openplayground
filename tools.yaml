@@ -581,6 +581,28 @@ groups:
         accent: "#039299"
         base: "#06302D"
 
+      - slug: cascadeur
+        name: HumanMotionCraft
+        alternative: Cascadeur
+        blurb: Keyframe a humanoid rig with IK and physics, and fill between poses with an in-betweener.
+        # Projects (.project.json), animations and poses (.clip.json, .pose.json) import; Files has no two-part types, so
+        # they show as JSON. Exports (.glb) go to Files. Upstream's releases are a Windows portable zip (no web zip), so like
+        # ClothCraft it has the head channel only; patches/cascadeur.yaml adds the web build. It needs WebGPU.
+        opens: []
+        imports: [json]
+        repo: YalKouassi/HumanMotionCraft
+        license: GPL-3.0-or-later
+        copyright:
+          - "Copyright (C) 2026 HumanMotionCraft Contributors"
+          - "Rig and mannequin: Anny, Copyright (C) 2025 NAVER Corporation (Apache-2.0); MakeHuman MPFB2 and its community poses (CC0 1.0)"
+          - "Motion data: CMU Graphics Lab Motion Capture Database; 100STYLE by Ian Mason, Sebastian Starke and Taku Komura (CC BY 4.0); Open Motion Project, ACCAD, The Ohio State University (CC BY 3.0); AddBiomechanics Dataset 1.0 (CC BY 4.0); clips generated with Kimodo by NVIDIA (NVIDIA Open Model License)"
+        # What the web build compiles and loads: docs, roadmap, training and tool commits don't rebuild it.
+        paths: [crates, assets, Cargo.toml, Cargo.lock]
+        patches: patches/cascadeur.yaml
+        icon: icons/humanmotioncraft.png
+        accent: "#E8743B"
+        base: "#3A1808"
+
   - name: Music
     tools:
       - slug: pro-tools
