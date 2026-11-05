@@ -493,20 +493,18 @@ groups:
         name: MaterialCraft
         alternative: Substance Designer
         blurb: Build tileable procedural materials from nodes, with noises, patterns, filters and PBR maps.
-        # Material graphs (.mcg) and published packages (.mca). Upstream releases are desktop-only (no web zip), so
-        # like SubCraft it has the head channel only; patches/substance-designer.yaml adds the web build.
-        opens: [mcg, mca]
+        # ArtCraft's MaterialCraft (it replaced PiJellyPin's, an independent project of the same name). Its web page has no
+        # file access yet (its own roadmap), so there is nothing here for Files to open.
+        opens: []
         imports: []
-        repo: PiJellyPin/MaterialCraft
+        repo: storytold/materialcraft
         license: MIT OR Apache-2.0
-        copyright: "Copyright (c) 2026 PiJellyPin and MaterialCraft contributors"
-        # What the web build compiles: README and docs commits don't rebuild it.
-        paths: [src, assets, build.rs, Cargo.toml]
-        patches: patches/substance-designer.yaml
-        live_kit: true
+        copyright: "Copyright (c) 2026 ArtCraft Team and the MaterialCraft contributors"
+        # What the web build compiles: docs, packaging and CI commits don't rebuild it.
+        paths: [apps, crates, assets, vendor, Cargo.toml, Cargo.lock]
         icon: icons/materialcraft.png
-        accent: "#7A4ED6"
-        base: "#1C0E3A"
+        accent: "#178A9C"
+        base: "#06303A"
 
       - slug: marvelous-designer
         name: ClothCraft
