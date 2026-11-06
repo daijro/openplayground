@@ -330,8 +330,7 @@ index 0000000..9f13962
 +        }
 +        let scenes = std::mem::replace(&mut self.project, project).launcher;
 +        self.history.changes = self.history.changes.wrapping_add(1);
-+        self.history.open_step = None;
-+        self.history.param_gesture = None;
++        self.history.gesture = None;
 +        self.live_decode();
 +        let shift = suhina_engine::SceneShift::between(&scenes, &self.project.launcher);
 +        self.update_player(shift).map_err(|e| e.0)?;
@@ -385,7 +384,7 @@ index 0000000..9f13962
 +    pub fn live_disconnected(&mut self) {
 +        self.history.undo.clear();
 +        self.history.redo.clear();
-+        self.history.open_step = None;
++        self.history.gesture = None;
 +    }
 +}
 +
@@ -527,7 +526,7 @@ index 0000000..1615a88
 +            super::View::Session => self.view.selected_slot.map(|(t, s)| ClipRef::Slot(t, s)),
 +            super::View::Arrangement => self.arrangement.selected_clip().map(|(t, i)| ClipRef::Arrangement(t, i)),
 +        };
-+        self.piano_clip(clip).map(|c| c.notes)
++        self.piano_clip(clip).map(|c| c.notes.to_vec())
 +    }
 +
 +    /// The waveforms of the shared project's audio, after audio came in.

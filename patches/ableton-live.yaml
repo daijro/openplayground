@@ -441,7 +441,7 @@
   before: "#[cfg(target_arch = \"wasm32\")] crate::app::live::pan(painter, column.track, Rect::from_min_size(Pos2::new(row.left(), row.center().y - size / 2.0), egui::Vec2::splat(size)));\n        "
 - live: true
   file: crates/ui/src/detail/detail_view/parameters.rs
-  find: 'if\s+let\s+Some\(response\)\s*=\s*response\.filter\(\|r\|\s*r\.changed\(\)\s*\|\|\s*r\.drag_stopped\(\)\)\s*\{'
+  find: 'if\s+(?:let\s+Some\(response\)\s*=\s*response\.filter\(\|r\|\s*r\.changed\(\)\s*\|\|\s*r\.drag_stopped\(\)\)|response\.as_ref\(\)\.is_some_and\(\|r\|\s*r\.changed\(\)\s*\|\|\s*r\.drag_stopped\(\)\))\s*\{'
   before: "#[cfg(target_arch = \"wasm32\")] crate::app::live::param(painter, track, &at.value(), &parameter.id, slider_rect, value, parameter.min, parameter.max, response.as_ref().is_some_and(|r| r.dragged()));\n    "
 - live: true
   file: apps/suhina-web/src/main.rs

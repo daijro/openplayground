@@ -184,7 +184,7 @@ index 0000000..bc98228
 +        let host = cpal::default_host();
 +        let device = host.default_output_device().ok_or("this browser has no audio output")?;
 +        let sample_rate = device.default_output_config().map(|c| c.sample_rate()).unwrap_or(48_000);
-+        let inputs = RenderInputs::from_audio(audio).with_assets(assets);
++        let inputs = RenderInputs::from_audio(audio, suhina_session::devices()).with_assets(assets);
 +        let mut renderer = Renderer::build(project, inputs, sample_rate, RenderOptions::STOPPED).map_err(|e| e.to_string())?;
 +        // No stretch worker thread: the renderer stretches clips itself, as an offline render does.
 +        let controller = renderer.controller();
