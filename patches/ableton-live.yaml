@@ -232,6 +232,9 @@
 - file: crates/ui/src/app.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/ui/src/app/quick_add.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
 - file: crates/ui/src/app/start_panel.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
