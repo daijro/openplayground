@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.21.0+b78e260d",
-  "photoshop@head": "head-6ef1032+b78e260d",
+  "photoshop@head": "head-6d40884+b78e260d",
   "illustrator": "v0.22.0+428ea7b9",
   "illustrator@head": "head-ff9deee+428ea7b9",
   "coreldraw@head": "head-f2ca874+32188fd2",
@@ -32,7 +32,7 @@
   "acrobat@head": "head-9dbede8+39c8d72c",
   "matlab@head": "head-effb421+9d58a9c6",
   "premiere": "v0.18.0+7c8bc0c7",
-  "premiere@head": "head-599399b+7c8bc0c7",
+  "premiere@head": "head-4d571c2+7c8bc0c7",
   "after-effects": "v0.22.0+7bcfac53",
   "after-effects@head": "head-bb2d200+7bcfac53",
   "davinci-resolve@head": "head-7e08914+e5727f1b",
