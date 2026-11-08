@@ -1,0 +1,89 @@
+# AniCraft in the browser. Upstream (github.com/storytold/AniCraft) says it runs in the browser but has no wasm32 code
+# yet (its web build is roadmap milestone M8) and no releases; these patches add the web build Playground serves, from
+# its head commit.
+#
+# patches/animate/web.diff adds new files only:
+#   index.html, Trunk.toml      the web build at the repository's root (build.mjs builds there): trunk builds the `anicraft`
+#                               binary, the desktop's editor (src/main.rs), for the page's canvas.
+#   src/web.rs                  the page's side: `main` on wasm starts the editor on the canvas with eframe's WebRunner (its glow
+#                               renderer on WebGL2). Open, Save, Save As, Import and the exports are Playground's dialogs
+#                               (`playgroundFiles`): the desktop's file dialog can't wait for an answer, so it asks the page
+#                               and gives nothing, and when the answer comes the command that asked runs with the file, as
+#                               after a desktop dialog. "Open in AniCraft" and a dropped file run the same way (a picture or an
+#                               SVG imports to the stage, anything else opens). What AniCraft writes outside /tmp (a save, an
+#                               export) goes to Files after the frame, and a save to download is handed to the browser once
+#                               written. The unsaved state is reported with `setUnsaved`.
+#   crates/geom/src/playground.rs  what wasm32-unknown-unknown lacks: `std` with web-time's clock and an in-memory file system
+#                               (read, write, rename, metadata). The modules that use them take `std` from here on wasm
+#                               through ONE `use` line at their end (a local `std` shadows the standard library's name in that
+#                               module; everything else in it still comes from the real std).
+#
+# Off: video export (WebM or MP4: it streams the frames to the user's own ffmpeg program, which a page can't run), PNG sequence
+# export (it needs a folder; export a PNG, GIF, SVG, Lottie file or a sprite sheet instead), opening an XFL folder package (a
+# .fla archive opens; the lone .xfl file of a folder package has nothing beside it on a page), the computer's fonts (text uses
+# egui's Ubuntu Light) and the settings file (a page has no settings folder: preferences live for the page, and saving them says so).
+# Rendering runs on the page's one thread (the render service falls back to rendering in the frame when it can't spawn a worker,
+# and rayon runs on the current thread). Native builds see none of this: every rule adds wasm-only lines.
+
+# The dependencies the page's side needs, wasm only: the canvas and the dialogs, and egui's text font; and web-time for geom's playground module.
+- file: Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/animate.yaml): the page's canvas and its dialogs, wasm only.\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"HtmlCanvasElement\"] }\nepaint_default_fonts = \"0.36\"\n"
+- file: crates/geom/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/animate.yaml): std's clock.\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nweb-time = \"1\"\n"
+- file: crates/geom/src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: std's clock and files (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub mod playground;\n"
+
+# The modules that use the clock or the files take `std` from the playground module on wasm. Found with: every module that names
+# `Instant` or `std::fs` and runs on the page (the tests and the CLI don't, and confirm.rs's read_dir only fails: its caller
+# skips the question). If upstream starts using these in another module, give it the same line; a missing one panics at the
+# first `Instant::now` (the page then stops) or fails the file call (the status line says so).
+- file: crates/engine/src/render_service.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse anicraft_geom::playground::std;\n"
+- file: crates/engine/src/format.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse anicraft_geom::playground::std;\n"
+- file: crates/engine/src/cmds_file.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse anicraft_geom::playground::std;\n"
+- file: crates/xfl/src/import.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse anicraft_geom::playground::std;\n"
+- file: src/stage.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse anicraft_geom::playground::std;\n"
+
+# Text lays out with the fonts in its library: AniCraft embeds Inter only when built with CRAFT_FONTS_DIR (these builds have none) and
+# otherwise finds the computer's fonts, which a page can't list. On the page the library gets egui's own Ubuntu Light, which the
+# interface is drawn with already.
+- file: src/theme.rs
+  find: '^pub fn embedded_fonts\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/theme.rs
+  find: '(?![\s\S])'
+  after: "\n/// Playground's browser build: egui's own text font (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub fn embedded_fonts() -> Vec<std::sync::Arc<[u8]>> {\n    vec![std::sync::Arc::from(epaint_default_fonts::UBUNTU_LIGHT)]\n}\n"
+
+# The font warm-up thread: `std::thread::spawn` panics when the page can't start a thread. Text then loads its fonts on first use.
+- file: src/app.rs
+  find: '^        std::thread::spawn\(\|\| \{'
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n        "
+
+# The desktop's file dialog (rfd, which has no blocking dialog on a page) asks the page instead (web.rs); `run` and `main` on wasm are web.rs's.
+- file: src/platform.rs
+  find: '^pub fn file_dialog\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/platform.rs
+  find: '(?![\s\S])'
+  after: "\n/// Playground's browser build: the page's dialog (web.rs) answers after the frame, so there is no path now (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub fn file_dialog(cmd: &str, _title: &str, default_name: &str) -> Option<PathBuf> {\n    crate::web::ask(cmd, default_name);\n    None\n}\n"
+- file: src/main.rs
+  find: '^fn run\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/main.rs
+  find: '^fn main\(\) -> eframe::Result \{'
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/main.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the page (web.rs), whose `main` starts the app on the canvas (patches/animate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod web;\n#[cfg(target_arch = \"wasm32\")]\nfn main() {\n    web::main();\n}\n"

@@ -429,6 +429,26 @@ groups:
         accent: "#9999FF"
         base: "#00005B"
 
+      - slug: animate
+        name: AniCraft
+        alternative: Animate
+        blurb: 2D vector animation with a timeline, layers, keyframes and tweens.
+        # Its own documents (.anicraft) and Animate's (.fla archives; the lone .xfl file of a folder package has nothing beside it on a
+        # page), and the SVG drawings and pictures it imports. Upstream has no releases, and no web build yet (its roadmap's M8), so like
+        # PixelCraft it has the head channel only; patches/animate.yaml adds the web build, without video export (it needs ffmpeg) and
+        # PNG sequence export (it needs a folder). PNG, GIF, SVG, Lottie and sprite sheet export work.
+        opens: [anicraft, fla]
+        imports: [svg, png, jpg, jpeg]
+        repo: storytold/AniCraft
+        license: MIT OR Apache-2.0
+        copyright: "Copyright (c) 2026 ArtCraft Team and the AniCraft contributors"
+        # What the web build compiles: docs and packaging commits don't rebuild it.
+        paths: [src, crates, assets, Cargo.toml, Cargo.lock, build.rs]
+        patches: patches/animate.yaml
+        icon: icons/anicraft.png
+        accent: "#2E66F0"
+        base: "#131316"
+
       - slug: davinci-resolve
         name: Picasso Suite
         alternative: DaVinci Resolve

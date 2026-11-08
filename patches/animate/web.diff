@@ -1,0 +1,383 @@
+diff --git a/Trunk.toml b/Trunk.toml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/Trunk.toml
+@@ -0,0 +1,7 @@
++# AniCraft in the browser, for Playground (patches/animate.yaml in the openplayground repository).
++# Build with: trunk build --release   (from the repository's root)
++[build]
++target = "index.html"
++public_url = "./"
++filehash = true
++dist = "target/trunk-dist"
+diff --git a/index.html b/index.html
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/index.html
+@@ -0,0 +1,20 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>AniCraft</title>
++  <!-- AniCraft in the browser, for Playground (patches/animate.yaml in the openplayground repository). -->
++  <link data-trunk rel="rust" href="Cargo.toml" data-bin="anicraft" data-wasm-opt="0" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #14141a; }
++    #anicraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
++    #anicraft_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #e6e6ee; font: 14px system-ui, sans-serif; pointer-events: none; }
++  </style>
++</head>
++<body>
++  <canvas id="anicraft_canvas"></canvas>
++  <div id="anicraft_loading">Loading AniCraft&hellip;</div>
++</body>
++</html>
+diff --git a/crates/geom/src/playground.rs b/crates/geom/src/playground.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/crates/geom/src/playground.rs
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
++//! AniCraft in the browser, for Playground (patches/animate.yaml in the openplayground repository).
++//!
++//! wasm32-unknown-unknown has no clock and no files: `Instant::now` panics there and every file call fails. The
++//! modules that use them take `std` from here instead, through one `#[cfg(target_arch = "wasm32")] use
++//! anicraft_geom::playground::std;` line at each one's end (a local `std` shadows the standard library's name in that
++//! module; everything else in it still comes from the real std):
++//!   time  web-time's Instant;
++//!   fs    an in-memory file system for the calls AniCraft makes (read, write, rename, metadata), each write noted
++//!         for the page to mirror to Playground's Files.
++//! Native builds don't compile this file.
++
++pub mod std {
++    pub use ::std::*;
++
++    pub mod time {
++        pub use web_time::*;
++    }
++
++    pub mod fs {
++        // What isn't here (read_dir, ...) is std's, which fails on a page.
++        pub use ::std::fs::*;
++        use ::std::cell::RefCell;
++        use ::std::collections::{BTreeMap, BTreeSet};
++        use ::std::io::{self, ErrorKind};
++        use ::std::path::{Component, Path, PathBuf};
++
++        #[derive(Default)]
++        struct Files {
++            bytes: BTreeMap<PathBuf, Vec<u8>>,
++            /// Paths written since the last [`changes`].
++            changed: BTreeSet<PathBuf>,
++        }
++
++        thread_local! {
++            static FILES: RefCell<Files> = RefCell::default();
++        }
++
++        /// `/a/./b/../c` -> `/a/c`: one spelling per file (relative paths start at `/`).
++        fn key(p: &Path) -> PathBuf {
++            let mut out = PathBuf::from("/");
++            for c in p.components() {
++                match c {
++                    Component::ParentDir => {
++                        out.pop();
++                    }
++                    Component::Normal(n) => out.push(n),
++                    _ => {}
++                }
++            }
++            out
++        }
++
++        /// Stores a file without noting a change (a file the page brings in from Files or a drop).
++        pub fn put(p: &Path, bytes: Vec<u8>) {
++            FILES.with_borrow_mut(|f| f.bytes.insert(key(p), bytes));
++        }
++
++        /// The paths written since the last call.
++        pub fn changes() -> Vec<PathBuf> {
++            FILES.with_borrow_mut(|f| ::std::mem::take(&mut f.changed).into_iter().collect())
++        }
++
++        pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(p: P, bytes: C) -> io::Result<()> {
++            let p = key(p.as_ref());
++            FILES.with_borrow_mut(|f| {
++                f.bytes.insert(p.clone(), bytes.as_ref().to_vec());
++                f.changed.insert(p);
++            });
++            Ok(())
++        }
++
++        pub fn read<P: AsRef<Path>>(p: P) -> io::Result<Vec<u8>> {
++            FILES
++                .with_borrow(|f| f.bytes.get(&key(p.as_ref())).cloned())
++                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, format!("{} does not exist", p.as_ref().display())))
++        }
++
++        pub fn read_to_string<P: AsRef<Path>>(p: P) -> io::Result<String> {
++            String::from_utf8(read(p)?).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
++        }
++
++        pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
++            let bytes = read(&from)?;
++            // The temporary file never was a change: only its new name is.
++            FILES.with_borrow_mut(|f| {
++                f.bytes.remove(&key(from.as_ref()));
++                f.changed.remove(&key(from.as_ref()));
++            });
++            write(to, bytes)
++        }
++
++        pub fn remove_file<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            FILES
++                .with_borrow_mut(|f| f.bytes.remove(&key(p.as_ref())))
++                .map(|_| ())
++                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no such file"))
++        }
++
++        pub fn create_dir_all<P: AsRef<Path>>(_: P) -> io::Result<()> {
++            Ok(())
++        }
++
++        /// A file's size. There are no folders (an XFL folder package can't be opened on a page).
++        pub struct Metadata(u64);
++
++        impl Metadata {
++            pub fn len(&self) -> u64 {
++                self.0
++            }
++            pub fn is_file(&self) -> bool {
++                true
++            }
++            pub fn is_dir(&self) -> bool {
++                false
++            }
++        }
++
++        pub fn metadata<P: AsRef<Path>>(p: P) -> io::Result<Metadata> {
++            read(p).map(|b| Metadata(b.len() as u64))
++        }
++    }
++}
+diff --git a/src/web.rs b/src/web.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/web.rs
+@@ -0,0 +1,209 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
++//! AniCraft in the browser, for Playground (patches/animate.yaml in the openplayground repository): the desktop
++//! window on the page's canvas, and its files in Playground's Files.
++//!
++//! Files live in memory (geom's playground.rs `std::fs`): a file from Files comes in at its path (`browser:/Art/a.anicraft`
++//! is `/Art/a.anicraft` here), and whatever AniCraft writes outside /tmp (a save, an export) goes to Files after the
++//! frame. The desktop's file dialog (`platform::file_dialog`) can't wait for an answer, so it asks the page and gives
++//! nothing; when the answer comes the command that asked runs with it, as it does after a desktop dialog. "Open in
++//! AniCraft" and a dropped file open (or, for a picture or an SVG, import) the same way.
++use crate::app::App;
++use anicraft_geom::playground::std::{self, fs};
++use serde_json::json;
++use std::cell::{OnceCell, RefCell};
++use std::path::{Path, PathBuf};
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++
++/// Memory only: files from the computer or a drop, and a save to download.
++const TMP: &str = "/tmp";
++const DOWNLOADS: &str = "/tmp/downloads";
++
++/// A dialog the app asked for this frame.
++struct Ask {
++    cmd: String,
++    name: String,
++}
++
++thread_local! {
++    static CTX: OnceCell<egui::Context> = const { OnceCell::new() };
++    static ASKED: RefCell<Option<Ask>> = const { RefCell::new(None) };
++    /// Commands to run, each with the file that answers its dialog.
++    static ANSWERED: RefCell<Vec<(String, PathBuf)>> = const { RefCell::new(Vec::new()) };
++}
++
++/// `platform::file_dialog` on the web: remember the question; the answer comes after the frame.
++pub fn ask(cmd: &str, name: &str) {
++    ASKED.set(Some(Ask { cmd: cmd.into(), name: name.into() }));
++}
++
++fn repaint() {
++    CTX.with(|c| c.get().map(egui::Context::request_repaint));
++}
++
++fn get(o: &JsValue, k: &str) -> JsValue {
++    js_sys::Reflect::get(o, &k.into()).unwrap_or(JsValue::UNDEFINED)
++}
++
++/// `playgroundFiles[method](...args)`; None when the page has none or it threw.
++fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = Some(get(&js_sys::global(), "playgroundFiles")).filter(JsValue::is_object)?;
++    let f = get(&api, method).dyn_into::<js_sys::Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++async fn wait(v: Option<JsValue>) -> Option<JsValue> {
++    let promise = v?.dyn_into::<js_sys::Promise>().ok()?;
++    wasm_bindgen_futures::JsFuture::from(promise).await.ok().filter(|v| !v.is_null() && !v.is_undefined())
++}
++
++fn options(pairs: &[(&str, JsValue)]) -> JsValue {
++    let o = js_sys::Object::new();
++    for (k, v) in pairs {
++        let _ = js_sys::Reflect::set(&o, &(*k).into(), v);
++    }
++    o.into()
++}
++
++/// The command that takes this file: pictures and SVG drawings import to the stage, the rest open.
++fn command(path: &Path) -> &'static str {
++    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
++        Some("svg" | "png" | "jpg" | "jpeg") => "file.import",
++        _ => "file.open",
++    }
++}
++
++/// A file from Files (`{ path, name, bytes }`) into memory at its path (one from the computer goes to `/tmp`).
++fn bring_in(file: &JsValue) -> Option<PathBuf> {
++    let name = get(file, "name").as_string()?;
++    let path = match get(file, "path").as_string() {
++        Some(p) => PathBuf::from(p.strip_prefix("browser:")?),
++        None => Path::new(TMP).join(Path::new(&name).file_name()?),
++    };
++    fs::put(&path, js_sys::Uint8Array::new(&get(file, "bytes")).to_vec());
++    Some(path)
++}
++
++/// Opens a file that came in ("Open in AniCraft", a drop).
++fn open(path: PathBuf) {
++    ANSWERED.with_borrow_mut(|a| a.push((command(&path).into(), path)));
++    repaint();
++}
++
++/// The page's app: the window, then what it asked of the page.
++struct Web {
++    app: App,
++    unsaved: bool,
++}
++
++impl Web {
++    /// After the window's frame: the answers to earlier dialogs, the dialog it asked for, and what it wrote.
++    fn after(&mut self) {
++        for (cmd, path) in ANSWERED.take() {
++            self.app.request(&cmd, json!({"path": path.display().to_string()}));
++            // A file from the computer or a download has no place in Files: Save asks where.
++            if self.app.s.path.as_deref().is_some_and(|p| p.starts_with(TMP)) {
++                self.app.s.path = None;
++            }
++        }
++        if let Some(Ask { cmd, name }) = ASKED.take() {
++            if matches!(cmd.as_str(), "file.export_video" | "file.export_png_sequence") {
++                self.app.status_err("Video and PNG sequence export are off in the browser build (they need ffmpeg and a folder); export a PNG, GIF, SVG or Lottie file instead.");
++            } else {
++                let save = !matches!(cmd.as_str(), "file.open" | "file.import");
++                let types: js_sys::Array = crate::platform::filters(&cmd).1.iter().map(|t| JsValue::from(*t)).collect();
++                let asked = if save {
++                    call("saveAs", &[options(&[("name", name.as_str().into()), ("types", types.into())])])
++                } else {
++                    call("open", &[options(&[("types", types.into())])])
++                };
++                wasm_bindgen_futures::spawn_local(async move {
++                    let Some(answer) = wait(asked).await else { return };
++                    let path = if save {
++                        match get(&answer, "path").as_string() {
++                            Some(p) => p.strip_prefix("browser:").map(PathBuf::from),
++                            None => Some(Path::new(DOWNLOADS).join(&name)),
++                        }
++                    } else {
++                        js_sys::Array::from(&answer).iter().find_map(|f| bring_in(&f))
++                    };
++                    if let Some(path) = path {
++                        ANSWERED.with_borrow_mut(|a| a.push((cmd, path)));
++                        repaint();
++                    }
++                });
++            }
++        }
++        for p in fs::changes() {
++            let (Ok(bytes), Some(name)) = (fs::read(&p), p.file_name()) else { continue };
++            let bytes = js_sys::Uint8Array::from(bytes.as_slice());
++            if p.starts_with(DOWNLOADS) {
++                call("download", &[name.to_string_lossy().as_ref().into(), bytes.into()]);
++                let _ = fs::remove_file(&p);
++            } else if !p.starts_with(TMP) {
++                call("write", &[format!("browser:{}", p.display()).into(), bytes.into()]);
++            }
++        }
++        if self.unsaved != self.app.s.is_dirty() {
++            self.unsaved = self.app.s.is_dirty();
++            call("setUnsaved", &[self.unsaved.into()]);
++        }
++    }
++}
++
++impl eframe::App for Web {
++    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
++        // A dropped file is only a name on the web: its bytes are read, then it is opened as "Open in AniCraft" is.
++        for f in std::mem::take(&mut raw_input.dropped_files) {
++            wasm_bindgen_futures::spawn_local(async move {
++                if let (Ok(bytes), Some(name)) = (f.bytes_async().await, f.path().file_name()) {
++                    let path = Path::new(TMP).join("dropped").join(name);
++                    fs::put(&path, bytes);
++                    open(path);
++                }
++            });
++        }
++    }
++
++    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
++        eframe::App::ui(&mut self.app, ui, frame);
++        self.after();
++    }
++}
++
++/// The page's `main`: the app on the canvas, with eframe's WebRunner.
++pub fn main() {
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("AniCraft: {info}").into())));
++    call(
++        "onOpen",
++        &[Closure::<dyn Fn(JsValue)>::new(|file| {
++            if let Some(path) = bring_in(&file) {
++                open(path);
++            }
++        })
++        .into_js_value()],
++    );
++    wasm_bindgen_futures::spawn_local(async move {
++        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
++        let canvas = document
++            .get_element_by_id("anicraft_canvas")
++            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
++            .expect("no #anicraft_canvas");
++        let creator = |cc: &eframe::CreationContext<'_>| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
++            CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
++            let session = anicraft_engine::Session::new(anicraft_engine::doc::sample::demo());
++            Ok(Box::new(Web { app: App::new(cc, session, None), unsaved: false }))
++        };
++        // eframe has both renderers in this build; the page draws with WebGL2.
++        let options = eframe::WebOptions { renderer: eframe::Renderer::Glow, ..Default::default() };
++        let runner = eframe::WebRunner::new();
++        let started = runner.start(canvas, options, Box::new(creator)).await;
++        // The runner lives as long as the page.
++        std::mem::forget(runner);
++        if let Some(loading) = document.get_element_by_id("anicraft_loading") {
++            match started {
++                Ok(()) => loading.remove(),
++                Err(e) => loading.set_text_content(Some(&format!("AniCraft could not start: {e:?}"))),
++            }
++        }
++    });
++}
