@@ -321,10 +321,10 @@ groups:
         base: "#2B0B40"
 
       - slug: notepad
-        name: NoteCraft Text
+        name: TextCraft
         alternative: Notepad
         blurb: A fast, modern text and Markdown editor with tabs.
-        # Not the OneNote alternative NoteCraft above. Files open and save through Playground's dialogs; settings and the
+        # Upstream is called NoteCraft (not the OneNote alternative above). Files open and save through Playground's dialogs; settings and the
         # session aren't kept. Upstream has no releases yet, so it has the head channel only; patches/notepad.yaml adds
         # the web build.
         opens: [txt, md, markdown, log, ini, cfg, conf, json, xml, yaml, yml, toml]
@@ -335,7 +335,7 @@ groups:
         # What the web build compiles: docs and CI commits don't rebuild it.
         paths: [crates, Cargo.toml, Cargo.lock, rust-toolchain.toml]
         patches: patches/notepad.yaml
-        icon: icons/notecraft-text.png
+        icon: icons/textcraft.png
         accent: "#4CC2FF"
         base: "#0C2F44"
 

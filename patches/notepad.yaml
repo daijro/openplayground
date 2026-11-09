@@ -1,4 +1,4 @@
-# NoteCraft Text in the browser. Upstream (github.com/cmspeedau/NoteCraft) has no browser build (its window is eframe's
+# TextCraft in the browser. Upstream (github.com/cmspeedau/NoteCraft) has no browser build (its window is eframe's
 # native one) and no releases; these patches add the web build Playground serves, from its head commit.
 #
 # patches/notepad/web.diff adds new files only:
@@ -6,7 +6,7 @@
 #                                   `notepad` binary, which starts as on the desktop, for the page's canvas.
 #   crates/platform/src/ui/web.rs   the page's side: mod.rs takes `eframe` from here on wasm, whose `run_native` starts the
 #                                   app on the canvas. File > Open and File > Save as are Playground's dialogs (`playgroundFiles`)
-#                                   in place of the egui file dialog; "Open in NoteCraft Text" and a dropped file open as
+#                                   in place of the egui file dialog; "Open in TextCraft" and a dropped file open as
 #                                   Open does, and the unsaved state goes to the leave warning.
 #   notepad-playground/             what wasm32-unknown-unknown lacks: `fs` in memory (read and write, the only calls
 #                                   nc-textproc's TextFile makes that a page can answer), each write mirrored to Files.

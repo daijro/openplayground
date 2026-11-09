@@ -4,7 +4,7 @@ index 0000000..18a1207
 --- /dev/null
 +++ b/Trunk.toml
 @@ -0,0 +1,7 @@
-+# NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground).
++# TextCraft in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground).
 +# Build with: trunk build --release   (from the repository's root)
 +[build]
 +target = "index.html"
@@ -18,13 +18,13 @@ index 0000000..a1171bb
 +++ b/crates/platform/src/ui/web.rs
 @@ -0,0 +1,168 @@
 +// SPDX-License-Identifier: MIT
-+//! NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground): the
++//! TextCraft in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground): the
 +//! desktop window on the page's canvas, and its files in Playground's Files.
 +//!
 +//! `ui::run` starts as on the desktop; mod.rs takes [`eframe`] from here on the web, whose `run_native` starts the
 +//! app on the page. Files live in memory (notepad-playground's `fs`): a file from Files comes in at its path
 +//! (`browser:/Notes/a.txt` is `/Notes/a.txt` here), and what the editor writes goes back to Files. Open and Save As
-+//! are Playground's dialogs instead of the egui file dialog; "Open in NoteCraft Text" and a file dropped on the page
++//! are Playground's dialogs instead of the egui file dialog; "Open in TextCraft" and a file dropped on the page
 +//! open as File > Open does. A file from the computer or a drop lives under `/tmp`, and saving it downloads it.
 +use super::{actions, state::{FileDialog, Shell, Tab}};
 +use notepad_playground::{call, fs};
@@ -161,7 +161,7 @@ index 0000000..a1171bb
 +
 +/// [`eframe::run_native`] on the web.
 +fn start(creator: ::eframe::AppCreator<'static>) {
-+    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("NoteCraft Text: {info}").into())));
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("TextCraft: {info}").into())));
 +    call("onOpen", &[Closure::<dyn Fn(JsValue)>::new(file_in).into_js_value()]);
 +    wasm_bindgen_futures::spawn_local(async move {
 +        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
@@ -180,7 +180,7 @@ index 0000000..a1171bb
 +        if let Some(loading) = document.get_element_by_id("notecraft_loading") {
 +            match started {
 +                Ok(()) => loading.remove(),
-+                Err(e) => loading.set_text_content(Some(&format!("NoteCraft Text could not start: {e:?}"))),
++                Err(e) => loading.set_text_content(Some(&format!("TextCraft could not start: {e:?}"))),
 +            }
 +        }
 +    });
@@ -196,8 +196,8 @@ index 0000000..b5db5b6
 +<head>
 +  <meta charset="utf-8">
 +  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-+  <title>NoteCraft Text</title>
-+  <!-- NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground). -->
++  <title>TextCraft</title>
++  <!-- TextCraft in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground). -->
 +  <link data-trunk rel="rust" href="crates/app/Cargo.toml" data-bin="notepad" data-wasm-opt="0" />
 +  <style>
 +    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #202020; }
@@ -208,7 +208,7 @@ index 0000000..b5db5b6
 +</head>
 +<body>
 +  <canvas id="notecraft_canvas"></canvas>
-+  <div id="notecraft_loading">Loading NoteCraft Text&hellip;</div>
++  <div id="notecraft_loading">Loading TextCraft&hellip;</div>
 +</body>
 +</html>
 diff --git a/notepad-playground/Cargo.toml b/notepad-playground/Cargo.toml
@@ -217,13 +217,13 @@ index 0000000..4f4430f
 --- /dev/null
 +++ b/notepad-playground/Cargo.toml
 @@ -0,0 +1,13 @@
-+# Playground's browser build of NoteCraft Text (patches/notepad.yaml in github.com/daijro/openplayground): the files
++# Playground's browser build of TextCraft (patches/notepad.yaml in github.com/daijro/openplayground): the files
 +# wasm32-unknown-unknown lacks, in memory and mirrored to Files. Native builds compile it empty.
 +[package]
 +name = "notepad-playground"
 +version = "0.1.0"
 +edition = "2024"
-+description = "NoteCraft Text in the browser: files in memory, mirrored to Playground's Files"
++description = "TextCraft in the browser: files in memory, mirrored to Playground's Files"
 +license = "MIT"
 +publish = false
 +
@@ -237,7 +237,7 @@ index 0000000..026fb26
 +++ b/notepad-playground/src/lib.rs
 @@ -0,0 +1,51 @@
 +// SPDX-License-Identifier: MIT
-+//! NoteCraft Text in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground).
++//! TextCraft in the browser, for Playground (patches/notepad.yaml in github.com/daijro/openplayground).
 +//!
 +//! wasm32-unknown-unknown has no files: every `std::fs` call fails. `nc-textproc` takes `fs` from here instead.
 +//! Files are kept in memory; a file from Files or a drop is [`fs::put`] in, and what the editor writes goes to
