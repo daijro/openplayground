@@ -1,138 +1,146 @@
 diff --git a/Trunk.toml b/Trunk.toml
 new file mode 100644
+index 0000000..1111111
 --- /dev/null
 +++ b/Trunk.toml
 @@ -0,0 +1,7 @@
-+# ProCraft in the browser, for Playground (patches/procreate.yaml in github.com/daijro/openplayground).
++# ProCraft in the browser, for Playground (patches/procreate.yaml in the openplayground repository).
 +# Build with: trunk build --release   (from the repository's root)
 +[build]
 +target = "index.html"
 +public_url = "./"
 +filehash = true
 +dist = "target/trunk-dist"
-diff --git a/apps/procraft/src/web.rs b/apps/procraft/src/web.rs
+diff --git a/index.html b/index.html
 new file mode 100644
+index 0000000..1111111
 --- /dev/null
-+++ b/apps/procraft/src/web.rs
-@@ -0,0 +1,371 @@
-+// SPDX-License-Identifier: MIT
-+//! ProCraft in the browser, for Playground (patches/procreate.yaml in github.com/daijro/openplayground): the desktop
-+//! app on the page's canvas, its files in Playground's Files.
++++ b/index.html
+@@ -0,0 +1,41 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>ProCraft</title>
++  <!-- ProCraft in the browser, for Playground (patches/procreate.yaml in the openplayground repository). -->
++  <link data-trunk rel="rust" href="desktop/Cargo.toml" data-bin="procraft" data-wasm-opt="0" />
++  <link data-trunk rel="icon" href="assets/app-icon/procraft-256.png" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0b0c; }
++    #procraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
++    #procraft_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #efe9dc; font: 14px system-ui, sans-serif; pointer-events: none; text-align: center; padding: 0 16px; }
++  </style>
++  <script>
++    // What winit leaves out of a pen: its pressure, eraser end and lean (PointerEvents, which winit's web backend gives as the
++    // mouse), kept for the brushes (desktop/src/web.rs: `procraftPen`, -1 while no pen is near). The Rust side asks for it
++    // before winit's own listener on the canvas has the event, as this one is on the window, in the capture phase.
++    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerleave']) {
++      addEventListener(type, (e) => {
++        const pen = e.pointerType === 'pen' && type !== 'pointerleave' && type !== 'pointercancel'
++        globalThis.procraftPen?.(pen ? (e.buttons ? e.pressure : 0) : -1, (e.buttons & 32) !== 0, e.tiltX, e.tiltY)
++      }, { capture: true, passive: true })
++    }
++    // Files dropped on the page (winit's web backend has no drops): to the app, as Files' "Open in ProCraft" are.
++    addEventListener('DOMContentLoaded', () => {
++      const canvas = document.getElementById('procraft_canvas')
++      canvas.addEventListener('dragover', (e) => e.preventDefault())
++      canvas.addEventListener('drop', async (e) => {
++        e.preventDefault()
++        for (const f of e.dataTransfer.files) globalThis.procraftOpened?.({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) })
++      })
++    })
++  </script>
++</head>
++<body>
++  <canvas id="procraft_canvas"></canvas>
++  <div id="procraft_loading">Loading ProCraft&hellip;</div>
++</body>
++</html>
+diff --git a/desktop/src/web.rs b/desktop/src/web.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/desktop/src/web.rs
+@@ -0,0 +1,298 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
++//! ProCraft in the browser, for Playground (patches/procreate.yaml in github.com/daijro/openplayground): the page's side.
 +//!
-+//! [`start`] runs the desktop's app on the page. Files live in memory (procraft-engine's `playground::std::fs`): a
-+//! file from Files comes in at its path (`browser:/Art/Sky.procraft` is `/Art/Sky.procraft` here). The open dialogs
-+//! take the iOS build's route: [`rfd::FileDialog::pick_file`] asks Playground's Open and gives nothing now, and the
-+//! app's frame checks [`rfd::poll_pick`] until the file is in memory. A save dialog gives a path in `/ProCraft/Saving`
-+//! at once; what the app writes there goes to Playground's Save As after the frame, then to the place in Files picked
-+//! (or the device's downloads). What the app writes elsewhere outside its own folder (a Gallery Duplicate, beside its
-+//! original) goes to Files too. "Open in ProCraft" and dropped files open as the matching Open… would. The Gallery
-+//! lists the paintings in Files. A pen's pressure (PointerEvent.pressure, kept by index.html) reaches the brushes as
-+//! Apple Pencil's touch force does.
++//! Files live in memory (procraft-engine's `playground::std::fs`): the gallery's artworks, settings and what comes in from
++//! Files or a drop (under `/files` and `/uploads`). The open dialogs (Open, Import, the pictures, brushes and palettes'
++//! pickers) ask Playground's Open and answer nothing at once (the `playground-rfd` stand-in notes what they asked):
++//! what it gives comes in as files dropped on the window, as "Open in ProCraft" and files dropped on the page do. The save
++//! dialogs answer at once with a path under `/downloads`; what the app writes there goes to Playground's Save As after
++//! the frame (a painting saved to Files is kept up to date there by the next Save). The artwork's unsaved state is
++//! reported with `setUnsaved`. A pen's pressure (PointerEvent.pressure, kept by index.html) reaches the brushes.
 +
-+use crate::{PendingOpen, ProCraftApp, MAX_RECENT};
-+use eframe::egui;
-+use procraft_engine::playground::std::fs;
-+use std::cell::{OnceCell, RefCell};
++use std::cell::{Cell, RefCell};
++use std::collections::HashMap;
 +use std::path::{Path, PathBuf};
-+use wasm_bindgen::{closure::Closure, JsCast as _, JsValue};
 +
-+/// ProCraft's own folder in memory (`HOME`), never copied to Files: settings and the recovery snapshot.
-+const OWN: &str = "/home";
-+/// Where the save dialogs point: what lands here goes to Playground's Save As.
-+const SAVING: &str = "/ProCraft/Saving";
++use procraft_engine::playground::std::fs;
++use wasm_bindgen::closure::Closure;
++use wasm_bindgen::{JsCast, JsValue};
++use winit::event_loop::EventLoopProxy;
++
++use super::App;
++
++/// Where the save dialogs say a file goes (`playground-rfd`'s).
++const DOWNLOADS: &str = "/downloads";
++/// Where files from Files are kept: `browser:/Art/Sky.procraft` is `/files/Art/Sky.procraft`.
++const FILES: &str = "/files";
 +/// Where a file from the computer (Open's "From computer…", a drop) is kept.
-+const OPENED: &str = "/ProCraft/Opened";
++const UPLOADS: &str = "/uploads";
++/// The pictures an artwork can be made of.
++const PICTURES: [&str; 8] = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
 +
-+/// Where Save As put an export.
-+enum Saved {
-+    InFiles(PathBuf),
-+    Downloaded,
-+    Cancelled,
-+}
-+
-+enum Pick {
-+    Idle,
-+    Waiting,
-+    Done(Option<PathBuf>),
-+}
++/// A file that came in: where it is, and whether it opens as an artwork of its own (Files' "Open in ProCraft", an answer
++/// to an artwork's Open) rather than as a drop on the window does (a picture dropped on a canvas is a layer).
++struct Incoming(PathBuf, bool);
 +
 +thread_local! {
-+    static CTX: OnceCell<egui::Context> = const { OnceCell::new() };
-+    /// The open dialog's state, for [`rfd::poll_pick`].
-+    static PICK: RefCell<Pick> = const { RefCell::new(Pick::Idle) };
-+    /// Files for the app to open ("Open in ProCraft", drops), on the next frame.
-+    static INCOMING: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-+    /// Exports that went through Save As: where the app wrote each, and where it went.
-+    static SAVED: RefCell<Vec<(PathBuf, Saved)>> = const { RefCell::new(Vec::new()) };
-+    /// The paintings in Files, for the Gallery.
-+    static LISTED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-+    /// The name Save As suggests: the last painting opened or saved.
-+    static NAME: RefCell<String> = RefCell::new("Untitled".into());
++    static INCOMING: RefCell<Vec<Incoming>> = const { RefCell::new(Vec::new()) };
++    static PROXY: RefCell<Option<EventLoopProxy<()>>> = const { RefCell::new(None) };
++    /// Where each painting saved to Files goes on the next Save: `/downloads/Sky.procraft` is `browser:/Art/Sky.procraft`.
++    static KEPT: RefCell<HashMap<PathBuf, String>> = RefCell::new(HashMap::new());
++    /// Whether there is work Files (or the downloads) doesn't have, as last reported.
++    static UNSAVED: Cell<bool> = const { Cell::new(false) };
++    /// The artwork last looked at and its edits then, and whether it changed since a save.
++    static WATCHED: Cell<(usize, u64)> = const { Cell::new((0, 0)) };
++    static DIRTY: Cell<bool> = const { Cell::new(false) };
 +}
 +
-+fn repaint() {
-+    CTX.with(|c| c.get().map(egui::Context::request_repaint));
-+}
++/// The console's log: warnings and errors where the browser shows them as such.
++struct Console;
 +
-+/// The desktop's file dialogs (the iOS build's shape: rfd-shim's).
-+pub mod rfd {
-+    use std::path::{Path, PathBuf};
-+
-+    pub struct FileDialog {
-+        types: Vec<String>,
++impl log::Log for Console {
++    fn enabled(&self, m: &log::Metadata) -> bool {
++        m.level() <= log::Level::Info && !m.target().starts_with("wgpu") && !m.target().starts_with("naga")
 +    }
-+
-+    impl FileDialog {
-+        pub fn new() -> Self {
-+            Self { types: Vec::new() }
-+        }
-+        pub fn add_filter(mut self, _name: &str, extensions: &[&str]) -> Self {
-+            self.types.extend(extensions.iter().map(|e| e.to_ascii_lowercase()));
-+            self
-+        }
-+        /// Asks Playground's Open (unless it is up already) and gives nothing now: the file comes through
-+        /// [`poll_pick`].
-+        pub fn pick_file(self) -> Option<PathBuf> {
-+            super::ask_open(&self.types);
-+            None
-+        }
-+        /// A path in /ProCraft/Saving, named after the last painting, with the first type's extension. What the app
-+        /// writes there goes to Playground's Save As after the frame.
-+        pub fn save_file(self) -> Option<PathBuf> {
-+            let name = super::NAME.with_borrow(Clone::clone);
-+            let file = match self.types.first() {
-+                Some(ext) => format!("{name}.{ext}"),
-+                None => name,
-+            };
-+            Some(Path::new(super::SAVING).join(file))
-+        }
-+    }
-+
-+    /// An open's state (rfd-shim's).
-+    pub enum PickPoll {
-+        NoRequest,
-+        Waiting,
-+        Picked(PathBuf),
-+        Cancelled(Option<&'static str>),
-+    }
-+
-+    /// Whether the file asked for is in memory yet. Call once per frame after `pick_file`.
-+    pub fn poll_pick() -> PickPoll {
-+        match super::PICK.replace(super::Pick::Idle) {
-+            super::Pick::Idle => PickPoll::NoRequest,
-+            super::Pick::Waiting => {
-+                super::PICK.set(super::Pick::Waiting);
-+                PickPoll::Waiting
++    fn log(&self, r: &log::Record) {
++        if self.enabled(r.metadata()) {
++            let line = JsValue::from_str(&format!("[{}] {}", r.level(), r.args()));
++            match r.level() {
++                log::Level::Error => web_sys::console::error_1(&line),
++                log::Level::Warn => web_sys::console::warn_1(&line),
++                _ => web_sys::console::log_1(&line),
 +            }
-+            super::Pick::Done(Some(path)) => PickPoll::Picked(path),
-+            super::Pick::Done(None) => PickPoll::Cancelled(None),
 +        }
 +    }
++    fn flush(&self) {}
 +}
 +
-+/// A pen's pressure on the canvas now (index.html keeps it while a pen is down), for `latest_touch_force`.
-+pub fn pen_pressure() -> Option<f32> {
-+    get(&js_sys::global(), "procraftPenPressure").as_f64().map(|p| (p as f32).clamp(0.0, 1.0))
++/// The loading note (index.html's), if it is still there.
++fn note() -> Option<web_sys::Element> {
++    web_sys::window()?.document()?.get_element_by_id("procraft_loading")
++}
++
++/// Said on the page where the loading note is.
++fn say(text: &str) {
++    if let Some(note) = note() {
++        note.set_text_content(Some(text));
++    }
 +}
 +
 +fn get(o: &JsValue, k: &str) -> JsValue {
@@ -160,249 +168,221 @@ new file mode 100644
 +}
 +
 +fn types(types: &[String]) -> JsValue {
-+    types.iter().map(|t| JsValue::from(t.as_str())).collect::<js_sys::Array>().into()
++    types.iter().map(|t| JsValue::from(t.to_ascii_lowercase())).collect::<js_sys::Array>().into()
 +}
 +
 +fn bytes(b: &[u8]) -> JsValue {
 +    js_sys::Uint8Array::from(b).into()
 +}
 +
-+/// The `path` of a file Playground gives (`browser:/a/b`), as a path here (`/a/b`).
-+fn path_in(o: &JsValue) -> Option<PathBuf> {
-+    get(o, "path").as_string().and_then(|p| p.strip_prefix("browser:").map(PathBuf::from))
++/// Wakes the window's loop, which looks at what came in as it finishes whatever it wakes for.
++fn wake() {
++    PROXY.with(|p| {
++        if let Some(p) = p.borrow().as_ref() {
++            let _ = p.send_event(());
++        }
++    });
 +}
 +
-+fn in_files(path: &Path) -> JsValue {
-+    format!("browser:{}", path.display()).into()
-+}
-+
-+/// A painting's name, for the next Save As to suggest.
-+fn remember_name(path: &Path) {
-+    let painting = matches!(kind(path), Some(PendingOpen::Project | PendingOpen::Psd | PendingOpen::Image));
-+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()).filter(|_| painting) {
-+        NAME.set(stem.to_string());
-+    }
-+}
-+
-+/// A file from Playground (`{ path, name, bytes }`) into memory at its path in Files; one from the computer goes to
-+/// /ProCraft/Opened.
++/// A file from Playground (`{ path, name, bytes }`) into memory: one in Files at its place there, one from the computer in
++/// /uploads.
 +fn bring_in(file: &JsValue) -> Option<PathBuf> {
 +    let name = get(file, "name").as_string()?;
-+    let path = match path_in(file) {
-+        Some(path) => path,
-+        None => Path::new(OPENED).join(Path::new(&name).file_name()?),
++    let path = match get(file, "path").as_string().and_then(|p| p.strip_prefix("browser:").map(str::to_owned)) {
++        Some(p) => Path::new(FILES).join(p.trim_start_matches('/')),
++        None => Path::new(UPLOADS).join(Path::new(&name).file_name()?),
 +    };
 +    fs::put(&path, js_sys::Uint8Array::new(&get(file, "bytes")).to_vec());
-+    remember_name(&path);
 +    Some(path)
 +}
 +
-+/// Playground's Open, for [`rfd::FileDialog::pick_file`].
-+fn ask_open(kinds: &[String]) {
-+    if PICK.with_borrow(|p| matches!(p, Pick::Waiting)) {
++fn come_in(path: PathBuf, as_artwork: bool) {
++    INCOMING.with_borrow_mut(|i| i.push(Incoming(path, as_artwork)));
++    wake();
++}
++
++/// Playground's Open, for an open dialog of the app's: what it picks comes in as files dropped on the window (or, for the
++/// artworks' Open, as artworks).
++fn ask_open(extensions: Vec<String>) {
++    let as_artwork = extensions.iter().any(|e| e == "procraft");
++    let asked = call("open", &[options(&[("types", types(&extensions))])]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(list) = wait(asked).await else { return };
++        for file in js_sys::Array::from(&list).iter() {
++            if let Some(path) = bring_in(&file) {
++                come_in(path, as_artwork);
++            }
++        }
++    });
++}
++
++/// What the app wrote under /downloads: Playground's Save As, then into Files where it was put (and kept up to date there
++/// by the next save of the same painting).
++fn save_as(written: PathBuf, data: Vec<u8>) {
++    let name = written.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled").to_owned();
++    let ext = written.extension().and_then(|e| e.to_str()).map(str::to_owned);
++    let painting = ext.as_deref() == Some("procraft");
++    if let Some(to) = KEPT.with_borrow(|k| k.get(&written).cloned()).filter(|_| painting) {
++        call("write", &[to.as_str().into(), bytes(&data)]);
++        DIRTY.set(false);
++        wake();
 +        return;
 +    }
-+    PICK.set(Pick::Waiting);
-+    let asked = call("open", &[options(&[("types", types(kinds))])]);
-+    wasm_bindgen_futures::spawn_local(async move {
-+        let file = wait(asked).await.and_then(|list| js_sys::Array::from(&list).iter().next());
-+        PICK.set(Pick::Done(file.as_ref().and_then(bring_in)));
-+        repaint();
-+    });
-+}
-+
-+/// What an Open… of the file's type does with it ("Open in ProCraft", a drop).
-+fn kind(path: &Path) -> Option<PendingOpen> {
-+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-+    Some(match ext.as_str() {
-+        "procraft" => PendingOpen::Project,
-+        "psd" => PendingOpen::Psd,
-+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" | "tif" | "tiff" => PendingOpen::Image,
-+        "pcpalette" | "gpl" => PendingOpen::Palette,
-+        "ttf" | "otf" => PendingOpen::Font,
-+        "pcbrush" | "abr" | "brush" | "brushset" | "kpp" | "bundle" | "sut" | "gbr" => PendingOpen::Brushes,
-+        _ => return None,
-+    })
-+}
-+
-+fn opened(file: JsValue) {
-+    if let Some(path) = bring_in(&file) {
-+        INCOMING.with_borrow_mut(|o| o.push(path));
-+        repaint();
-+    }
-+}
-+
-+/// An export the app wrote to /ProCraft/Saving: Playground's Save As, then into Files where it was put.
-+fn save_as(written: PathBuf, data: Vec<u8>) {
-+    let name = written.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled").to_string();
-+    let ext = written.extension().and_then(|e| e.to_str()).map(str::to_string);
-+    let asked = call(
-+        "saveAs",
-+        &[options(&[("name", name.as_str().into()), ("types", types(ext.as_slice())), ("bytes", bytes(&data))])],
-+    );
++    let asked = call("saveAs", &[options(&[("name", name.as_str().into()), ("types", types(ext.as_slice())), ("bytes", bytes(&data))])]);
 +    wasm_bindgen_futures::spawn_local(async move {
 +        let answer = wait(asked).await;
-+        let saved = match answer.as_ref().and_then(path_in) {
++        match answer.as_ref().and_then(|a| get(a, "path").as_string()) {
 +            Some(to) => {
-+                call("write", &[in_files(&to), bytes(&data)]);
-+                fs::put(&to, data);
-+                remember_name(&to);
-+                Saved::InFiles(to)
-+            }
-+            None if answer.is_some() => Saved::Downloaded,
-+            None => Saved::Cancelled,
-+        };
-+        SAVED.with_borrow_mut(|s| s.push((written, saved)));
-+        repaint();
-+    });
-+}
-+
-+/// The Gallery's paintings: the `.procraft` files in Files (the first few the Gallery can show), brought into memory.
-+fn list_paintings() {
-+    wasm_bindgen_futures::spawn_local(async {
-+        let Some(list) = wait(call("files", &["browser:/".into()])).await else { return };
-+        let found: Vec<String> = js_sys::Array::from(&list).iter().filter_map(|p| p.as_string()).collect();
-+        for p in found.into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".procraft")).take(MAX_RECENT) {
-+            let Some(path) = p.strip_prefix("browser:").map(PathBuf::from) else { continue };
-+            if fs::metadata(&path).is_err() {
-+                let Some(data) = wait(call("read", &[p.as_str().into()])).await else { continue };
-+                fs::put(&path, js_sys::Uint8Array::new(&data).to_vec());
-+            }
-+            LISTED.with_borrow_mut(|l| l.push(path));
-+        }
-+        repaint();
-+    });
-+}
-+
-+/// The page's app: the desktop's, then what it asked of the page.
-+struct Web {
-+    app: ProCraftApp,
-+    gallery_open: bool,
-+}
-+
-+impl Web {
-+    /// After the app's frame: files that came in, saves that landed, the Gallery's list, and what the app wrote.
-+    fn after(&mut self, ctx: &egui::Context) {
-+        let app = &mut self.app;
-+        for path in INCOMING.take() {
-+            match kind(&path) {
-+                Some(kind) => app.open_picked(kind, path),
-+                None => app.status = format!("ProCraft can't open {}.", path.display()),
-+            }
-+            ctx.request_repaint();
-+        }
-+        for (written, saved) in SAVED.take() {
-+            let name = written.file_name().unwrap_or_default().to_string_lossy().to_string();
-+            let written = written.to_string_lossy().to_string();
-+            match saved {
-+                Saved::InFiles(to) => {
-+                    let to = to.to_string_lossy().to_string();
-+                    app.recent.iter_mut().filter(|r| **r == written).for_each(|r| *r = to.clone());
-+                    app.status = format!("Saved {to}");
++                call("write", &[to.as_str().into(), bytes(&data)]);
++                if painting {
++                    KEPT.with_borrow_mut(|k| k.insert(written, to));
++                    DIRTY.set(false);
 +                }
-+                Saved::Downloaded => app.status = format!("Downloaded {name}"),
-+                Saved::Cancelled => app.status = format!("{name} not saved."),
 +            }
-+            // A project saved to Files is in the Gallery at its place there; one that wasn't isn't anywhere.
-+            app.recent.retain(|r| *r != written);
-+            app.gallery_keys.clear();
++            // downloaded (the shell did it, from the bytes it was given): the next save asks again
++            None if answer.is_some() => {
++                KEPT.with_borrow_mut(|k| k.remove(&written));
++                DIRTY.set(false);
++            }
++            None => {}
 +        }
-+        if app.gallery_open && !self.gallery_open {
-+            list_paintings();
++        wake();
++    });
++}
++
++impl App {
++    /// After each event the loop handles: what the open dialogs asked, what came in from Files or a drop, what the app wrote
++    /// for the downloads, and whether there is unsaved work.
++    pub(super) fn web_after(&mut self) {
++        for asked in playground_rfd::asked() {
++            ask_open(asked.extensions);
 +        }
-+        self.gallery_open = app.gallery_open;
-+        for path in LISTED.take() {
-+            let path = path.to_string_lossy().to_string();
-+            if app.recent.len() < MAX_RECENT && !app.recent.contains(&path) {
-+                app.recent.push(path);
++        let incoming = INCOMING.take();
++        if !incoming.is_empty() {
++            let (artworks, others): (Vec<_>, Vec<_>) = incoming.into_iter().partition(|Incoming(path, as_artwork)| {
++                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
++                matches!(ext.as_str(), "procraft" | "procreate" | "psd") || (*as_artwork && PICTURES.contains(&ext.as_str()))
++            });
++            if !artworks.is_empty() {
++                let folder = if self.session.is_some() { self.artwork_folder() } else { self.gallery.folder() };
++                self.import(artworks.into_iter().map(|Incoming(p, _)| p).collect(), folder);
++            }
++            self.dropped.extend(others.into_iter().map(|Incoming(p, _)| p));
++            if let Some(screen) = &self.screen {
++                screen.window.request_redraw();
 +            }
 +        }
 +        for path in fs::changes() {
-+            if path.starts_with(OWN) || fs::metadata(&path).map_or(true, |m| !m.is_file()) {
++            let name = path.to_string_lossy();
++            if !path.starts_with(DOWNLOADS) || name.ends_with(".part") || name.ends_with(".tmp") {
 +                continue;
 +            }
-+            if path.starts_with(SAVING) {
-+                if let Some(data) = fs::take(&path) {
-+                    save_as(path, data);
-+                }
-+            } else if let Ok(data) = fs::read(&path) {
-+                call("write", &[in_files(&path), bytes(&data)]);
++            if let Some(data) = fs::metadata(&path).ok().filter(|m| m.is_file()).and_then(|_| fs::take(&path)) {
++                save_as(path, data);
 +            }
 +        }
-+    }
-+}
-+
-+impl eframe::App for Web {
-+    /// A dropped file is only a name on the web: once its bytes are in memory (at /ProCraft/Opened/<name>), the app
-+    /// opens it as "Open in ProCraft" does.
-+    fn raw_input_hook(&mut self, _: &egui::Context, raw_input: &mut egui::RawInput) {
-+        for f in std::mem::take(&mut raw_input.dropped_files) {
-+            wasm_bindgen_futures::spawn_local(async move {
-+                if let (Ok(data), Some(name)) = (f.bytes_async().await, f.path().file_name()) {
-+                    let path = Path::new(OPENED).join(name);
-+                    fs::put(&path, data);
-+                    remember_name(&path);
-+                    INCOMING.with_borrow_mut(|o| o.push(path));
-+                    repaint();
-+                }
-+            });
++        // work since the last save: an artwork whose edits changed (the gallery here lasts only as long as the page)
++        if let Some(session) = &self.session {
++            let now = (std::sync::Arc::as_ptr(session) as usize, session.edits());
++            let before = WATCHED.replace(now);
++            if before.0 == now.0 && before.1 != now.1 {
++                DIRTY.set(true);
++            }
++        }
++        if DIRTY.get() != UNSAVED.get() {
++            UNSAVED.set(DIRTY.get());
++            call("setUnsaved", &[DIRTY.get().into()]);
 +        }
 +    }
-+
-+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-+        eframe::App::ui(&mut self.app, ui, frame);
-+        self.after(&ui.ctx().clone());
-+    }
-+
-+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-+        eframe::App::save(&mut self.app, storage);
-+    }
 +}
 +
-+/// `run` on the web: the app on the page's #procraft_canvas, and Playground's "Open in ProCraft".
++/// `main` on the page: asks for the GPU, then starts the app on the canvas (`run`, the desktop's `main`).
 +pub fn start() {
-+    call("onOpen", &[Closure::<dyn Fn(JsValue)>::new(opened).into_js_value()]);
++    std::panic::set_hook(Box::new(|info| {
++        web_sys::console::error_1(&JsValue::from_str(&format!("panicked: {info}")));
++        say(&format!("ProCraft stopped: {info}"));
++    }));
++    let _ = log::set_logger(&Console).map(|()| log::set_max_level(log::LevelFilter::Info));
++    let webgpu = web_sys::window()
++        .and_then(|w| js_sys::Reflect::get(&w.navigator(), &"gpu".into()).ok())
++        .is_some_and(|g| !g.is_undefined());
++    if !webgpu {
++        say("ProCraft needs WebGPU, which this browser doesn't have (Chrome, Edge or Safari 26 do).");
++        return;
++    }
++    // Files' "Open in ProCraft" and a file dropped on the page (index.html passes it on)
++    let opened = Closure::<dyn Fn(JsValue)>::new(|file: JsValue| {
++        if let Some(path) = bring_in(&file) {
++            come_in(path, get(&file, "path").is_string());
++        }
++    })
++    .into_js_value();
++    let _ = js_sys::Reflect::set(&js_sys::global(), &"procraftOpened".into(), &opened);
++    call("onOpen", &[opened]);
++    // a pen's pressure, eraser end and lean, from index.html: what moves the mouse pointer is then a pen (as a tablet's under X11)
++    let pen = Closure::<dyn Fn(f64, bool, f64, f64)>::new(|pressure: f64, eraser: bool, tilt_x: f64, tilt_y: f64| {
++        if pressure < 0.0 {
++            crate::pen::set_mouse_pen(None);
++            return;
++        }
++        let tilt = (tilt_x.to_radians().tan().powi(2) + tilt_y.to_radians().tan().powi(2)).sqrt().atan() as f32;
++        let towards = tilt_x.atan2(-tilt_y) as f32;
++        crate::pen::set_mouse_pen(Some((crate::pen::MousePen { pressure: pressure as f32, eraser }, (tilt, towards))));
++    })
++    .into_js_value();
++    let _ = js_sys::Reflect::set(&js_sys::global(), &"procraftPen".into(), &pen);
 +    wasm_bindgen_futures::spawn_local(async {
-+        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
-+        let canvas = document
-+            .get_element_by_id("procraft_canvas")
-+            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-+            .expect("no #procraft_canvas");
-+        let started = eframe::WebRunner::new()
-+            .start(
-+                canvas,
-+                eframe::WebOptions::default(),
-+                Box::new(|cc| {
-+                    CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
-+                    Ok(Box::new(Web { app: ProCraftApp::new(cc), gallery_open: false }))
-+                }),
-+            )
-+            .await;
-+        if let Some(loading) = document.get_element_by_id("procraft_loading") {
-+            match started {
-+                Ok(()) => loading.remove(),
-+                Err(e) => loading.set_text_content(Some(&format!("ProCraft could not start: {e:?}"))),
++        match procraft_gpu::web::preload().await {
++            Ok(()) => {
++                if let Some(note) = note() {
++                    note.remove();
++                }
++                super::run();
 +            }
++            Err(e) => say(&format!("ProCraft can't use the GPU: {e}")),
 +        }
 +    });
 +}
++
++/// The window's loop, which `come_in` wakes.
++pub fn keep_proxy(proxy: EventLoopProxy<()>) {
++    PROXY.set(Some(proxy));
++}
++
++/// Lets the canvas follow the page: the window's first size is a fixed one, which the page's own style (100%) replaces.
++pub fn fit() {
++    if let Some(canvas) = canvas() {
++        let style = canvas.style();
++        let _ = style.remove_property("width");
++        let _ = style.remove_property("height");
++    }
++}
++
++/// The canvas the app draws on (index.html's).
++pub fn canvas() -> Option<web_sys::HtmlCanvasElement> {
++    web_sys::window()?.document()?.get_element_by_id("procraft_canvas")?.dyn_into().ok()
++}
 diff --git a/crates/engine/src/playground.rs b/crates/engine/src/playground.rs
 new file mode 100644
+index 0000000..1111111
 --- /dev/null
 +++ b/crates/engine/src/playground.rs
-@@ -0,0 +1,380 @@
-+// SPDX-License-Identifier: MIT
+@@ -0,0 +1,584 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
 +//! ProCraft in the browser, for Playground (patches/procreate.yaml in github.com/daijro/openplayground).
 +//!
-+//! wasm32-unknown-unknown has no clock and no files: `Instant::now` panics there, and every file call fails, the
-+//! `image` crate's own `open` and `save_buffer` included. The modules that use them take `std` (and `image`) from here
-+//! instead, through one `#[cfg(target_arch = "wasm32")] use …::playground::…;` line at each one's end (a local name
++//! wasm32-unknown-unknown has no clock, no files, no threads and nothing to wait with: `Instant::now` panics there,
++//! every file call fails and `thread::spawn` panics. The modules that use them take `std` (and `pollster`) from
++//! here instead, through one `#[cfg(target_arch = "wasm32")] use …::playground::…;` line at each one's end (a local name
 +//! shadows the crate's in that module; everything else in it still comes from the real one):
-+//!   std::time  web-time's clock (its Instant a day on, so the app can step back from `now`);
-+//!   std::fs    an in-memory file system (paintings, exports, brushes, palettes, settings, the recovery snapshot), each
-+//!              write noted for the page to mirror into Files (apps/procraft/src/web.rs);
-+//!   std::env   `HOME` is `/home` (settings live in memory, so every page starts afresh); nothing else is set;
-+//!   image      `open`, `ImageReader::open` and `save_buffer` through those files.
++//!   std::time    web-time's clock;
++//!   std::fs      an in-memory file system (the gallery's artworks, packages, exports, brushes, settings), each write
++//!                noted for the page to mirror into Files (desktop/src/web.rs);
++//!   std::env     `HOME` is `/home` (settings live in memory, so every page starts afresh); nothing else is set;
++//!   std::thread  the page has one: a spawned thread's work runs where it is spawned, at once (a thread that would
++//!                loop or wait for work does not start); scopes likewise; `sleep` does not wait;
++//!   pollster     `block_on` polls once: what the page cannot wait for (a GPU error scope's answer, the adapters' list)
++//!                gives nothing.
 +
 +// Not every part of std's API that is here gets used.
 +#![allow(dead_code)]
@@ -411,72 +391,14 @@ new file mode 100644
 +    pub use ::std::*;
 +
 +    pub mod time {
-+        use ::std::ops::{Add, AddAssign, Sub, SubAssign};
 +        pub use web_time::*;
-+
-+        /// web-time's Instant, a day on from the page's start: the app sets clocks in the past
-+        /// (`Instant::now() - PREVIEW_MIN_DT`), which web-time's clock, 0 when the page opened, cannot go below.
-+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-+        pub struct Instant(web_time::Instant);
-+
-+        impl Instant {
-+            pub fn now() -> Self {
-+                Self(web_time::Instant::now() + Duration::from_secs(86_400))
-+            }
-+            pub fn elapsed(&self) -> Duration {
-+                Self::now().saturating_duration_since(*self)
-+            }
-+            pub fn duration_since(&self, earlier: Self) -> Duration {
-+                self.0.duration_since(earlier.0)
-+            }
-+            pub fn saturating_duration_since(&self, earlier: Self) -> Duration {
-+                self.0.saturating_duration_since(earlier.0)
-+            }
-+            pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
-+                self.0.checked_duration_since(earlier.0)
-+            }
-+            pub fn checked_add(&self, d: Duration) -> Option<Self> {
-+                self.0.checked_add(d).map(Self)
-+            }
-+            pub fn checked_sub(&self, d: Duration) -> Option<Self> {
-+                self.0.checked_sub(d).map(Self)
-+            }
-+        }
-+        impl Add<Duration> for Instant {
-+            type Output = Self;
-+            fn add(self, d: Duration) -> Self {
-+                Self(self.0 + d)
-+            }
-+        }
-+        impl Sub<Duration> for Instant {
-+            type Output = Self;
-+            fn sub(self, d: Duration) -> Self {
-+                Self(self.0 - d)
-+            }
-+        }
-+        impl Sub for Instant {
-+            type Output = Duration;
-+            fn sub(self, earlier: Self) -> Duration {
-+                self.saturating_duration_since(earlier)
-+            }
-+        }
-+        impl AddAssign<Duration> for Instant {
-+            fn add_assign(&mut self, d: Duration) {
-+                self.0 += d;
-+            }
-+        }
-+        impl SubAssign<Duration> for Instant {
-+            fn sub_assign(&mut self, d: Duration) {
-+                self.0 -= d;
-+            }
-+        }
 +    }
 +
 +    pub mod env {
 +        pub use ::std::env::*;
 +        use ::std::ffi::{OsStr, OsString};
 +
-+        /// `HOME` is `/home`: settings and the recovery snapshot go to the in-memory files. Nothing else is set.
++        /// `HOME` is `/home`: settings go to the in-memory files. Nothing else is set.
 +        pub fn var_os<K: AsRef<OsStr>>(key: K) -> Option<OsString> {
 +            (key.as_ref() == "HOME").then(|| OsString::from("/home"))
 +        }
@@ -484,10 +406,106 @@ new file mode 100644
 +        pub fn var<K: AsRef<OsStr>>(key: K) -> Result<String, VarError> {
 +            var_os(key).and_then(|v| v.into_string().ok()).ok_or(VarError::NotPresent)
 +        }
++
++        /// std's panics where there is no file system: here it is in memory.
++        pub fn temp_dir() -> ::std::path::PathBuf {
++            "/tmp".into()
++        }
++
++        pub fn current_dir() -> ::std::io::Result<::std::path::PathBuf> {
++            Ok("/".into())
++        }
++    }
++
++    pub mod process {
++        pub use ::std::process::*;
++
++        pub fn id() -> u32 {
++            1
++        }
++    }
++
++    pub mod thread {
++        pub use ::std::thread::*;
++        use ::std::io;
++        use ::std::marker::PhantomData;
++
++        /// What a thread started would have given: its work ran when it was started.
++        pub struct JoinHandle<T>(T);
++
++        impl<T> JoinHandle<T> {
++            pub fn join(self) -> Result<T> {
++                Ok(self.0)
++            }
++            pub fn is_finished(&self) -> bool {
++                true
++            }
++        }
++
++        pub fn spawn<F: FnOnce() -> T, T>(f: F) -> JoinHandle<T> {
++            JoinHandle(f())
++        }
++
++        /// The work of these runs at once; the others loop or wait for work, which a page can't (they don't start).
++        const RUNS: &[&str] = &["procraft-pipelines", "brush previews", "selection reach", "flood reach", "fill", "plugin filter"];
++
++        #[derive(Default)]
++        pub struct Builder(Option<String>);
++
++        impl Builder {
++            pub fn new() -> Self {
++                Self(None)
++            }
++            pub fn name(mut self, name: String) -> Self {
++                self.0 = Some(name);
++                self
++            }
++            pub fn stack_size(self, _size: usize) -> Self {
++                self
++            }
++            pub fn spawn<F: FnOnce() -> T, T>(self, f: F) -> io::Result<JoinHandle<T>> {
++                if self.0.as_deref().is_some_and(|n| RUNS.contains(&n)) {
++                    Ok(JoinHandle(f()))
++                } else {
++                    Err(io::Error::new(io::ErrorKind::Unsupported, "a page has one thread"))
++                }
++            }
++        }
++
++        pub struct Scope<'scope, 'env: 'scope>(PhantomData<&'scope mut &'scope ()>, PhantomData<&'env mut &'env ()>);
++
++        pub struct ScopedJoinHandle<'scope, T>(T, PhantomData<&'scope ()>);
++
++        impl<T> ScopedJoinHandle<'_, T> {
++            pub fn join(self) -> Result<T> {
++                Ok(self.0)
++            }
++            pub fn is_finished(&self) -> bool {
++                true
++            }
++        }
++
++        impl<'scope> Scope<'scope, '_> {
++            pub fn spawn<F: FnOnce() -> T + 'scope, T: 'scope>(&'scope self, f: F) -> ScopedJoinHandle<'scope, T> {
++                ScopedJoinHandle(f(), PhantomData)
++            }
++        }
++
++        pub fn scope<'env, F, T>(f: F) -> T
++        where
++            F: for<'scope> FnOnce(&'scope Scope<'scope, 'env>) -> T,
++        {
++            f(&Scope(PhantomData, PhantomData))
++        }
++
++        pub fn sleep(_: ::std::time::Duration) {}
++
++        pub fn available_parallelism() -> io::Result<::std::num::NonZeroUsize> {
++            Ok(::std::num::NonZeroUsize::MIN)
++        }
 +    }
 +
 +    pub mod fs {
-+        pub use ::std::fs::*;
 +        use ::std::cell::RefCell;
 +        use ::std::collections::{BTreeMap, BTreeSet};
 +        use ::std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
@@ -601,6 +619,14 @@ new file mode 100644
 +            Ok(())
 +        }
 +
++        pub fn create_dir<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            create_dir_all(p)
++        }
++
++        pub fn canonicalize<P: AsRef<Path>>(p: P) -> io::Result<PathBuf> {
++            Ok(key(p.as_ref()))
++        }
++
 +        pub fn remove_file<P: AsRef<Path>>(p: P) -> io::Result<()> {
 +            let p = key(p.as_ref());
 +            with(|t| match t.entries.get(&p) {
@@ -613,16 +639,50 @@ new file mode 100644
 +            })
 +        }
 +
++        pub fn remove_dir_all<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            let p = key(p.as_ref());
++            with(|t| {
++                let gone: Vec<PathBuf> = t.entries.keys().filter(|k| k.starts_with(&p)).cloned().collect();
++                if gone.is_empty() {
++                    return Err(missing(&p));
++                }
++                for k in gone {
++                    t.entries.remove(&k);
++                    t.mark(k);
++                }
++                Ok(())
++            })
++        }
++
++        pub fn remove_dir<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            remove_dir_all(p)
++        }
++
 +        pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
 +            let (from, to) = (key(from.as_ref()), key(to.as_ref()));
-+            let bytes = read(&from)?;
 +            with(|t| {
-+                t.entries.remove(&from);
-+                t.mark(from);
-+                t.put(to.clone(), bytes);
-+                t.mark(to);
-+            });
-+            Ok(())
++                let moved: Vec<PathBuf> = t.entries.keys().filter(|k| k.starts_with(&from)).cloned().collect();
++                if moved.is_empty() {
++                    return Err(missing(&from));
++                }
++                for k in moved {
++                    if let Some(entry) = t.entries.remove(&k) {
++                        let at = to.join(k.strip_prefix(&from).unwrap_or(Path::new("")));
++                        t.parents(&at);
++                        t.entries.insert(at.clone(), entry);
++                        t.mark(at);
++                    }
++                    t.mark(k);
++                }
++                Ok(())
++            })
++        }
++
++        pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
++            let bytes = read(from)?;
++            let n = bytes.len() as u64;
++            write(to, bytes)?;
++            Ok(n)
 +        }
 +
 +        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -667,10 +727,118 @@ new file mode 100644
 +            })
 +        }
 +
-+        /// A file's bytes, read whole when it opens; one created to write is stored when flushed or dropped.
++        pub fn symlink_metadata<P: AsRef<Path>>(p: P) -> io::Result<Metadata> {
++            metadata(p)
++        }
++
++        pub struct DirEntry(PathBuf, bool, u64, web_time::SystemTime);
++        impl DirEntry {
++            pub fn path(&self) -> PathBuf {
++                self.0.clone()
++            }
++            pub fn file_name(&self) -> ::std::ffi::OsString {
++                self.0.file_name().unwrap_or_default().to_owned()
++            }
++            pub fn file_type(&self) -> io::Result<FileType> {
++                Ok(FileType(self.1))
++            }
++            pub fn metadata(&self) -> io::Result<Metadata> {
++                Ok(Metadata(self.1.then_some((self.2, self.3))))
++            }
++        }
++
++        pub struct ReadDir(::std::vec::IntoIter<DirEntry>);
++        impl Iterator for ReadDir {
++            type Item = io::Result<DirEntry>;
++            fn next(&mut self) -> Option<Self::Item> {
++                self.0.next().map(Ok)
++            }
++        }
++
++        pub fn read_dir<P: AsRef<Path>>(p: P) -> io::Result<ReadDir> {
++            let dir = key(p.as_ref());
++            TREE.with(|t| {
++                let t = t.borrow();
++                if !matches!(t.entries.get(&dir), Some(Entry::Dir)) {
++                    return Err(missing(p.as_ref()));
++                }
++                let kids: Vec<DirEntry> = t
++                    .entries
++                    .iter()
++                    .filter(|(k, _)| k.parent() == Some(dir.as_path()) && **k != dir)
++                    .map(|(k, e)| match e {
++                        Entry::File(bytes, at) => DirEntry(k.clone(), true, bytes.len() as u64, *at),
++                        Entry::Dir => DirEntry(k.clone(), false, 0, web_time::SystemTime::UNIX_EPOCH),
++                    })
++                    .collect();
++                Ok(ReadDir(kids.into_iter()))
++            })
++        }
++
++        /// What `OpenOptions` asked for.
++        #[derive(Clone, Default)]
++        pub struct OpenOptions {
++            read: bool,
++            write: bool,
++            append: bool,
++            truncate: bool,
++            create: bool,
++            create_new: bool,
++        }
++
++        impl OpenOptions {
++            pub fn new() -> Self {
++                Self::default()
++            }
++            pub fn read(&mut self, on: bool) -> &mut Self {
++                self.read = on;
++                self
++            }
++            pub fn write(&mut self, on: bool) -> &mut Self {
++                self.write = on;
++                self
++            }
++            pub fn append(&mut self, on: bool) -> &mut Self {
++                self.append = on;
++                self
++            }
++            pub fn truncate(&mut self, on: bool) -> &mut Self {
++                self.truncate = on;
++                self
++            }
++            pub fn create(&mut self, on: bool) -> &mut Self {
++                self.create = on;
++                self
++            }
++            pub fn create_new(&mut self, on: bool) -> &mut Self {
++                self.create_new = on;
++                self
++            }
++            pub fn open<P: AsRef<Path>>(&self, p: P) -> io::Result<File> {
++                let there = metadata(p.as_ref()).is_ok_and(|m| m.is_file());
++                if self.create_new && there {
++                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, "the file exists"));
++                }
++                if !there && !(self.create || self.create_new) {
++                    return Err(missing(p.as_ref()));
++                }
++                let kept = if there && !self.truncate { read(p.as_ref())? } else { Vec::new() };
++                let mut data = Cursor::new(kept);
++                if self.append {
++                    data.seek(SeekFrom::End(0))?;
++                }
++                let to = (self.write || self.append).then(|| key(p.as_ref()));
++                if to.is_some() && (!there || self.truncate) {
++                    write(p.as_ref(), [])?;
++                }
++                Ok(File { data, to, dirty: false })
++            }
++        }
++
++        /// A file's bytes, read whole when it opens; one opened to write is stored when flushed or dropped.
 +        pub struct File {
 +            data: Cursor<Vec<u8>>,
-+            /// Where written bytes go, for a file created to write.
++            /// Where written bytes go, for a file opened to write.
 +            to: Option<PathBuf>,
 +            dirty: bool,
 +        }
@@ -680,15 +848,29 @@ new file mode 100644
 +                Ok(File { data: Cursor::new(read(p)?), to: None, dirty: false })
 +            }
 +            pub fn create<P: AsRef<Path>>(p: P) -> io::Result<File> {
-+                let p = key(p.as_ref());
-+                write(&p, [])?;
-+                Ok(File { data: Cursor::new(Vec::new()), to: Some(p), dirty: false })
++                OpenOptions::new().write(true).create(true).truncate(true).open(p)
++            }
++            pub fn options() -> OpenOptions {
++                OpenOptions::new()
 +            }
 +            pub fn metadata(&self) -> io::Result<Metadata> {
 +                Ok(Metadata(Some((self.data.get_ref().len() as u64, web_time::SystemTime::now()))))
 +            }
 +            /// The bytes are stored when the file is flushed or dropped.
 +            pub fn sync_all(&self) -> io::Result<()> {
++                Ok(())
++            }
++            pub fn set_len(&self, _: u64) -> io::Result<()> {
++                Ok(())
++            }
++            pub fn set_modified(&self, at: web_time::SystemTime) -> io::Result<()> {
++                if let Some(to) = &self.to {
++                    with(|t| {
++                        if let Some(Entry::File(_, when)) = t.entries.get_mut(to) {
++                            *when = at;
++                        }
++                    });
++                }
 +                Ok(())
 +            }
 +            fn store(&mut self) {
@@ -733,76 +915,541 @@ new file mode 100644
 +    }
 +}
 +
-+/// The `image` crate, with what reads or writes a path going through the in-memory files above.
-+pub mod image {
-+    use super::std::fs;
-+    pub use ::image::*;
-+    use ::std::io::Cursor;
-+    use ::std::path::Path;
++/// `exists`, `is_file` and `is_dir` of a `PathBuf`, from the in-memory files: `Path`'s own ask the real file system (std's, not
++/// shadowed here), which has none. A trait's method is found before the `Path` a `PathBuf` derefs to, so this answers for a
++/// `PathBuf` (a `&Path` still asks std's): the modules whose paths come from `join` or a directory's entries take it in with `std`.
++pub trait PathExt {
++    fn exists(&self) -> bool;
++    fn is_file(&self) -> bool;
++    fn is_dir(&self) -> bool;
++}
 +
-+    /// `image::open`: the format from the extension, as image's own.
-+    pub fn open<P: AsRef<Path>>(p: P) -> ImageResult<DynamicImage> {
-+        ImageReader::open(p)?.decode()
++impl PathExt for ::std::path::PathBuf {
++    fn exists(&self) -> bool {
++        std::fs::metadata(self).is_ok()
 +    }
-+
-+    /// `image::save_buffer`: the format from the extension, as image's own.
-+    pub fn save_buffer<P: AsRef<Path>>(
-+        p: P,
-+        buf: &[u8],
-+        width: u32,
-+        height: u32,
-+        color: impl Into<ExtendedColorType>,
-+    ) -> ImageResult<()> {
-+        let mut out = Cursor::new(Vec::new());
-+        write_buffer_with_format(&mut out, buf, width, height, color, ImageFormat::from_path(p.as_ref())?)?;
-+        fs::write(p, out.into_inner())?;
-+        Ok(())
++    fn is_file(&self) -> bool {
++        std::fs::metadata(self).is_ok_and(|m| m.is_file())
 +    }
++    fn is_dir(&self) -> bool {
++        std::fs::metadata(self).is_ok_and(|m| m.is_dir())
++    }
++}
 +
-+    /// `ImageReader::open`, giving image's own reader over the file's bytes.
-+    pub struct ImageReader;
-+    impl ImageReader {
-+        pub fn open<P: AsRef<Path>>(p: P) -> ::std::io::Result<::image::ImageReader<Cursor<Vec<u8>>>> {
-+            let mut reader = ::image::ImageReader::new(Cursor::new(fs::read(p.as_ref())?));
-+            if let Ok(format) = ImageFormat::from_path(p) {
-+                reader.set_format(format);
-+            }
-+            Ok(reader)
++/// `pollster`, polling once: what a page can't wait for gives its type's default (no GPU error, no adapters).
++pub mod pollster {
++    use ::std::future::Future;
++    use ::std::pin::pin;
++    use ::std::task::{Context, Poll, Waker};
++
++    pub fn block_on<F: Future>(f: F) -> F::Output
++    where
++        F::Output: Default,
++    {
++        match pin!(f).poll(&mut Context::from_waker(Waker::noop())) {
++            Poll::Ready(v) => v,
++            Poll::Pending => F::Output::default(),
 +        }
 +    }
 +}
-diff --git a/index.html b/index.html
+diff --git a/crates/gpu/src/web.rs b/crates/gpu/src/web.rs
 new file mode 100644
+index 0000000..1111111
 --- /dev/null
-+++ b/index.html
-@@ -0,0 +1,30 @@
-+<!DOCTYPE html>
-+<html lang="en">
-+<head>
-+  <meta charset="utf-8">
-+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-+  <title>ProCraft</title>
-+  <!-- ProCraft in the browser, for Playground (patches/procreate.yaml in github.com/daijro/openplayground). -->
-+  <link data-trunk rel="rust" href="apps/procraft/Cargo.toml" data-bin="procraft" data-wasm-opt="0" />
-+  <link data-trunk rel="icon" href="assets/icon-256.png" />
-+  <style>
-+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #f4eee4; }
-+    #procraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-+    #procraft_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-+      color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
-+  </style>
-+  <script>
-+    // A pen's pressure while it is down, for the brushes (apps/procraft/src/web.rs): egui hands touch force on (Apple
-+    // Pencil in Safari) but not a pen's PointerEvent.pressure.
-+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
-+      addEventListener(type, (e) => {
-+        globalThis.procraftPenPressure = e.pointerType === 'pen' && e.buttons ? e.pressure : undefined
-+      }, { capture: true, passive: true })
++++ b/crates/gpu/src/web.rs
+@@ -0,0 +1,304 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
++//! ProCraft in the browser, for Playground (patches/procreate.yaml in github.com/daijro/openplayground): what the GPU
++//! gives a page, which can't wait. The adapter and device can only be asked for without waiting, so the page's start asks
++//! for them ([`preload`]) before the app starts, and `Gpu::create` takes them where it would have blocked on
++//! `pollster::block_on`. And pixels can't be mapped and waited for either: see [`read`].
++
++use std::cell::RefCell;
++
++use procraft_engine::geom::IRect;
++use wasm_bindgen::JsCast;
++
++use crate::GpuError;
++use crate::canvas::Readback;
++
++thread_local! {
++    static PRELOADED: RefCell<Option<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)>> = const { RefCell::new(None) };
++    static READER: RefCell<Option<Reader>> = const { RefCell::new(None) };
++}
++
++/// Asks the browser for the adapter and the device (the same the desktop asks for, `Gpu::create`'s).
++pub async fn preload() -> Result<(), GpuError> {
++    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
++    desc.backends = wgpu::Backends::BROWSER_WEBGPU;
++    let instance = wgpu::Instance::new(desc);
++    let adapter = instance
++        .request_adapter(&wgpu::RequestAdapterOptions {
++            power_preference: wgpu::PowerPreference::HighPerformance,
++            force_fallback_adapter: false,
++            compatible_surface: None,
++            apply_limit_buckets: false,
++        })
++        .await
++        .map_err(|e| GpuError::NoAdapter(e.to_string()))?;
++    let (device, queue) = adapter
++        .request_device(&wgpu::DeviceDescriptor {
++            label: Some("procraft"),
++            required_features: adapter.features() & wgpu::Features::DUAL_SOURCE_BLENDING,
++            required_limits: adapter.limits(),
++            memory_hints: wgpu::MemoryHints::MemoryUsage,
++            ..Default::default()
++        })
++        .await
++        .map_err(|e| GpuError::Device(e.to_string()))?;
++    PRELOADED.with(|p| *p.borrow_mut() = Some((instance, adapter, device, queue)));
++    Ok(())
++}
++
++pub(crate) fn instance() -> wgpu::Instance {
++    PRELOADED.with(|p| p.borrow().as_ref().map(|(i, ..)| i.clone())).unwrap_or_else(|| {
++        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
++        desc.backends = wgpu::Backends::BROWSER_WEBGPU;
++        wgpu::Instance::new(desc)
++    })
++}
++
++pub(crate) fn adapter() -> Result<wgpu::Adapter, GpuError> {
++    PRELOADED
++        .with(|p| p.borrow().as_ref().map(|(_, a, ..)| a.clone()))
++        .ok_or_else(|| GpuError::NoAdapter("WebGPU wasn't asked for".to_owned()))
++}
++
++pub(crate) fn device() -> Result<(wgpu::Device, wgpu::Queue), GpuError> {
++    PRELOADED
++        .with(|p| p.borrow().as_ref().map(|(_, _, d, q)| (d.clone(), q.clone())))
++        .ok_or_else(|| GpuError::Device("WebGPU wasn't asked for".to_owned()))
++}
++
++// ---- reading pixels back
++//
++// A page can't wait for the GPU: `map_async` answers in a later task, which a blocking readback never reaches. What it can
++// do at once is draw onto a canvas and read the canvas (`drawImage`, `getImageData`), which the browser answers by
++// waiting for the GPU itself. So a texture is read by drawing it onto a hidden canvas twice, its colour (alpha made 1) and
++// its alpha (as grey), and reading each: the pixels come back as they are, premultiplied, with nothing lost to the
++// canvas's own premultiplying. Everything that reads a texture goes through `start_reading_part`, which asks here instead.
++
++struct Reader {
++    /// The canvas the GPU draws on, and the one a 2D context copies it onto to read it.
++    canvas: web_sys::HtmlCanvasElement,
++    flat: web_sys::HtmlCanvasElement,
++    context: web_sys::CanvasRenderingContext2d,
++    surface: wgpu::Surface<'static>,
++    format: wgpu::TextureFormat,
++    pipeline: wgpu::RenderPipeline,
++    layout: wgpu::BindGroupLayout,
++    /// What each pass draws: 0 the colour, 1 the alpha.
++    modes: [wgpu::Buffer; 2],
++    size: (u32, u32),
++}
++
++const BLIT: &str = "
++@group(0) @binding(0) var source: texture_2d<f32>;
++@group(0) @binding(1) var<uniform> mode: vec4<u32>;
++@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
++    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
++    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
++}
++@fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
++    let t = textureLoad(source, vec2<i32>(at.xy), 0);
++    if mode.x == 0u { return vec4<f32>(t.rgb, 1.0); }
++    return vec4<f32>(t.a, t.a, t.a, 1.0);
++}
++";
++
++fn reader(gpu: &crate::Gpu) -> Result<Reader, String> {
++    let document = web_sys::window().and_then(|w| w.document()).ok_or("no page")?;
++    let canvas: web_sys::HtmlCanvasElement = document.create_element("canvas").map_err(|_| "no canvas")?.unchecked_into();
++    // (a canvas has one kind of context: the 2D one that reads the picture is on a canvas of its own)
++    let flat: web_sys::HtmlCanvasElement = document.create_element("canvas").map_err(|_| "no canvas")?.unchecked_into();
++    let options = js_sys::Object::new();
++    js_sys::Reflect::set(&options, &"willReadFrequently".into(), &true.into()).map_err(|_| "no options")?;
++    let context: web_sys::CanvasRenderingContext2d = flat
++        .get_context_with_context_options("2d", &options)
++        .map_err(|_| "no 2d context")?
++        .ok_or("no 2d context")?
++        .unchecked_into();
++    let surface = gpu.instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| e.to_string())?;
++    let formats = surface.get_capabilities(&gpu.adapter).formats;
++    let format = [wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Bgra8Unorm]
++        .into_iter()
++        .find(|f| formats.contains(f))
++        .ok_or("the canvas takes no 8-bit format")?;
++    let device = &gpu.device;
++    let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
++        binding,
++        visibility: wgpu::ShaderStages::FRAGMENT,
++        ty,
++        count: None,
++    };
++    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++        label: Some("read back"),
++        entries: &[
++            entry(
++                0,
++                wgpu::BindingType::Texture {
++                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
++                    view_dimension: wgpu::TextureViewDimension::D2,
++                    multisampled: false,
++                },
++            ),
++            entry(
++                1,
++                wgpu::BindingType::Buffer {
++                    ty: wgpu::BufferBindingType::Uniform,
++                    has_dynamic_offset: false,
++                    min_binding_size: None,
++                },
++            ),
++        ],
++    });
++    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
++        label: Some("read back"),
++        source: wgpu::ShaderSource::Wgsl(BLIT.into()),
++    });
++    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
++        label: Some("read back"),
++        bind_group_layouts: &[Some(&layout)],
++        immediate_size: 0,
++    });
++    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
++        label: Some("read back"),
++        layout: Some(&pipeline_layout),
++        vertex: wgpu::VertexState {
++            module: &module,
++            entry_point: Some("vs"),
++            compilation_options: Default::default(),
++            buffers: &[],
++        },
++        fragment: Some(wgpu::FragmentState {
++            module: &module,
++            entry_point: Some("fs"),
++            compilation_options: Default::default(),
++            targets: &[Some(format.into())],
++        }),
++        primitive: wgpu::PrimitiveState::default(),
++        depth_stencil: None,
++        multisample: wgpu::MultisampleState::default(),
++        multiview_mask: None,
++        cache: None,
++    });
++    let mode = |m: u32| {
++        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
++            label: Some("read back mode"),
++            size: 16,
++            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
++            mapped_at_creation: false,
++        });
++        gpu.queue.write_buffer(&buffer, 0, &[m.to_le_bytes(), [0; 4], [0; 4], [0; 4]].concat());
++        buffer
++    };
++    Ok(Reader { canvas, flat, context, surface, format, pipeline, layout, modes: [mode(0), mode(1)], size: (0, 0) })
++}
++
++impl Reader {
++    /// What the hidden canvas shows after `pass` (0 the colour, 1 the alpha) over `source`, as `getImageData` gives it.
++    fn draw(&mut self, gpu: &crate::Gpu, source: &wgpu::TextureView, size: (u32, u32), pass: usize) -> Result<Vec<u8>, String> {
++        if self.size != size {
++            self.surface.configure(
++                &gpu.device,
++                &wgpu::SurfaceConfiguration {
++                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
++                    format: self.format,
++                    width: size.0,
++                    height: size.1,
++                    present_mode: wgpu::PresentMode::Fifo,
++                    desired_maximum_frame_latency: 2,
++                    alpha_mode: wgpu::CompositeAlphaMode::Opaque,
++                    color_space: wgpu::SurfaceColorSpace::default(),
++                    view_formats: Vec::new(),
++                },
++            );
++            self.flat.set_width(size.0);
++            self.flat.set_height(size.1);
++            self.size = size;
++        }
++        let (wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) =
++            self.surface.get_current_texture()
++        else {
++            return Err("the canvas gave no picture to draw on".to_owned());
++        };
++        let target = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
++        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
++            label: Some("read back"),
++            layout: &self.layout,
++            entries: &[
++                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(source) },
++                wgpu::BindGroupEntry { binding: 1, resource: self.modes[pass].as_entire_binding() },
++            ],
++        });
++        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("read back") });
++        {
++            let mut drawing = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                label: Some("read back"),
++                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                    view: &target,
++                    depth_slice: None,
++                    resolve_target: None,
++                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
++                })],
++                depth_stencil_attachment: None,
++                timestamp_writes: None,
++                occlusion_query_set: None,
++                multiview_mask: None,
++            });
++            drawing.set_pipeline(&self.pipeline);
++            drawing.set_bind_group(0, &group, &[]);
++            drawing.draw(0..3, 0..1);
++        }
++        gpu.queue.submit([encoder.finish()]);
++        self.context.draw_image_with_html_canvas_element(&self.canvas, 0.0, 0.0).map_err(|_| "drawImage failed")?;
++        let data = self
++            .context
++            .get_image_data(0.0, 0.0, f64::from(size.0), f64::from(size.1))
++            .map_err(|_| "getImageData failed")?;
++        drop(frame);
++        Ok(data.data().0)
 +    }
-+  </script>
-+</head>
-+<body>
-+  <canvas id="procraft_canvas"></canvas>
-+  <div id="procraft_loading">Loading ProCraft&hellip;</div>
-+</body>
-+</html>
++}
++
++/// `rect` of `texture`, read back at once (4 bytes a pixel, premultiplied, rows top to bottom without padding).
++pub(crate) fn read(gpu: &crate::Gpu, texture: &wgpu::Texture, rect: IRect) -> Readback {
++    let (width, height) = (rect.width(), rect.height());
++    let done = READER.with(|r| -> Result<Vec<u8>, String> {
++        let mut r = r.borrow_mut();
++        if r.is_none() {
++            *r = Some(reader(gpu)?);
++        }
++        let reader = r.as_mut().ok_or("no reader")?;
++        // a copy of the part wanted, which the shader can sample whatever the texture's own usage
++        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
++        let copy = gpu.device.create_texture(&wgpu::TextureDescriptor {
++            label: Some("read back"),
++            size,
++            mip_level_count: 1,
++            sample_count: 1,
++            dimension: wgpu::TextureDimension::D2,
++            format: texture.format(),
++            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
++            view_formats: &[],
++        });
++        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("read back") });
++        encoder.copy_texture_to_texture(
++            wgpu::TexelCopyTextureInfo {
++                texture,
++                mip_level: 0,
++                origin: wgpu::Origin3d { x: rect.x0.max(0) as u32, y: rect.y0.max(0) as u32, z: 0 },
++                aspect: wgpu::TextureAspect::All,
++            },
++            copy.as_image_copy(),
++            size,
++        );
++        gpu.queue.submit([encoder.finish()]);
++        let view = copy.create_view(&wgpu::TextureViewDescriptor::default());
++        let mut pixels = reader.draw(gpu, &view, (width, height), 0)?;
++        let alpha = reader.draw(gpu, &view, (width, height), 1)?;
++        for (p, a) in pixels.chunks_exact_mut(4).zip(alpha.chunks_exact(4)) {
++            p[3] = a[0];
++        }
++        Ok(pixels)
++    });
++    match done {
++        Ok(pixels) => Readback::Ready(pixels),
++        Err(why) => Readback::Failed(why),
++    }
++}
+diff --git a/playground-arboard/Cargo.toml b/playground-arboard/Cargo.toml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/playground-arboard/Cargo.toml
+@@ -0,0 +1,6 @@
++[package]
++name = "playground-arboard"
++version = "0.0.0"
++edition = "2021"
++license = "MIT OR Apache-2.0"
++description = "Playground's browser build of ProCraft (patches/procreate.yaml): arboard's system clipboard, which a page can't read"
+diff --git a/playground-arboard/src/lib.rs b/playground-arboard/src/lib.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/playground-arboard/src/lib.rs
+@@ -0,0 +1,40 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
++//! arboard's system clipboard as a page has it (Playground's browser build of ProCraft, patches/procreate.yaml): there is
++//! none to read, so no clipboard can be made and the pictures, files and text pasted from outside the app say so.
++
++use std::borrow::Cow;
++use std::path::PathBuf;
++
++#[derive(Debug)]
++pub struct Error;
++
++pub struct ImageData<'a> {
++    pub width: usize,
++    pub height: usize,
++    pub bytes: Cow<'a, [u8]>,
++}
++
++pub struct Clipboard;
++
++pub struct Get;
++
++impl Clipboard {
++    pub fn new() -> Result<Clipboard, Error> {
++        Err(Error)
++    }
++    pub fn get_text(&mut self) -> Result<String, Error> {
++        Err(Error)
++    }
++    pub fn get_image(&mut self) -> Result<ImageData<'static>, Error> {
++        Err(Error)
++    }
++    pub fn get(&mut self) -> Get {
++        Get
++    }
++}
++
++impl Get {
++    pub fn file_list(self) -> Result<Vec<PathBuf>, Error> {
++        Err(Error)
++    }
++}
+diff --git a/playground-rfd/Cargo.toml b/playground-rfd/Cargo.toml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/playground-rfd/Cargo.toml
+@@ -0,0 +1,9 @@
++[package]
++name = "playground-rfd"
++version = "0.0.0"
++edition = "2021"
++license = "MIT OR Apache-2.0"
++description = "Playground's browser build of ProCraft (patches/procreate.yaml): rfd's blocking dialogs, answered by the page"
++
++[dependencies]
++web-sys = { version = "0.3", features = ["Window"] }
+diff --git a/playground-rfd/src/lib.rs b/playground-rfd/src/lib.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/playground-rfd/src/lib.rs
+@@ -0,0 +1,112 @@
++// SPDX-License-Identifier: MIT OR Apache-2.0
++//! rfd's blocking dialogs as a page has them (Playground's browser build of ProCraft, patches/procreate.yaml). A page can't
++//! wait for a file dialog, so the open dialogs answer nothing now and note what they asked (`asked`): the page shows
++//! Playground's Open, and what it picks comes in as files dropped on the window. A save dialog answers at once with a
++//! path in memory under `/downloads`; what the app writes there goes to Playground's Save As after the frame.
++
++use std::cell::RefCell;
++use std::path::PathBuf;
++
++/// What an open dialog asked for: its title and the extensions of its filters.
++pub struct Asked {
++    pub title: String,
++    pub extensions: Vec<String>,
++}
++
++thread_local! {
++    static ASKED: RefCell<Vec<Asked>> = const { RefCell::new(Vec::new()) };
++}
++
++/// The open dialogs asked since the last call.
++pub fn asked() -> Vec<Asked> {
++    ASKED.with(|a| std::mem::take(&mut *a.borrow_mut()))
++}
++
++/// Where the save dialogs say a file goes.
++pub const DOWNLOADS: &str = "/downloads";
++
++#[derive(Default)]
++pub struct FileDialog {
++    title: String,
++    extensions: Vec<String>,
++    name: String,
++}
++
++impl FileDialog {
++    pub fn new() -> Self {
++        Self::default()
++    }
++    pub fn set_title(mut self, title: impl Into<String>) -> Self {
++        self.title = title.into();
++        self
++    }
++    pub fn add_filter(mut self, _name: impl Into<String>, extensions: &[impl ToString]) -> Self {
++        self.extensions.extend(extensions.iter().map(ToString::to_string));
++        self
++    }
++    pub fn set_file_name(mut self, name: impl Into<String>) -> Self {
++        self.name = name.into();
++        self
++    }
++    fn ask(self) {
++        ASKED.with(|a| a.borrow_mut().push(Asked { title: self.title, extensions: self.extensions }));
++    }
++    pub fn pick_file(self) -> Option<PathBuf> {
++        self.ask();
++        None
++    }
++    pub fn pick_files(self) -> Option<Vec<PathBuf>> {
++        self.ask();
++        None
++    }
++    /// A folder to write into can't be picked on a page.
++    pub fn pick_folder(self) -> Option<PathBuf> {
++        None
++    }
++    pub fn save_file(self) -> Option<PathBuf> {
++        let name = if self.name.is_empty() { "Untitled".to_owned() } else { self.name };
++        Some(PathBuf::from(DOWNLOADS).join(name))
++    }
++}
++
++#[derive(Clone, Copy)]
++pub enum MessageLevel {
++    Info,
++    Warning,
++    Error,
++}
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub enum MessageDialogResult {
++    Ok,
++}
++
++#[derive(Default)]
++pub struct MessageDialog {
++    title: String,
++    text: String,
++}
++
++impl MessageDialog {
++    pub fn new() -> Self {
++        Self::default()
++    }
++    pub fn set_level(self, _: MessageLevel) -> Self {
++        self
++    }
++    pub fn set_title(mut self, title: impl Into<String>) -> Self {
++        self.title = title.into();
++        self
++    }
++    pub fn set_description(mut self, text: impl Into<String>) -> Self {
++        self.text = text.into();
++        self
++    }
++    /// The browser's own alert (it does wait).
++    pub fn show(self) -> MessageDialogResult {
++        if let Some(window) = web_sys::window() {
++            let _ = window.alert_with_message(&format!("{}\n\n{}", self.title, self.text));
++        }
++        MessageDialogResult::Ok
++    }
++}

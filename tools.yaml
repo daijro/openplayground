@@ -6,7 +6,7 @@
 #   license: the app's licence (SPDX id, from its LICENSE file), which its patches here are under too (patches/README.md).
 #   copyright: its copyright line(s), as its LICENSE, NOTICE or README states them, for the bar's License notice
 #           The bar's Source menu links its LICENSE file, or LICENSE-MIT and LICENSE-APACHE for "MIT OR Apache-2.0".
-#   license_file: its one licence's file, where that isn't LICENSE (optional; ProCraft's is LICENSE-MIT)
+#   license_file: its one licence's file, where that isn't LICENSE (optional)
 #   tag:    release tag to pin (optional; default: the newest non-prerelease that has a matching asset, else
 #           the newest pre-release that has one, for repos that have only pre-releases so far)
 #   branch: the branch the head channel builds (optional; default: main)
@@ -211,24 +211,25 @@ groups:
       - slug: procreate
         name: ProCraft
         alternative: Procreate
-        blurb: Layered painting with pressure brushes, masks, selections, text and animation.
-        # Its paintings (.procraft) and the images and PSDs it opens; brushes (Procreate's .brush and .brushset,
-        # Photoshop's, Krita's, Clip Studio's, GIMP's), palettes and fonts import. Upstream's releases are Android, iOS
-        # and Windows packages only (no web zip), so like Pro Wave it has the head channel only; patches/procreate.yaml
-        # adds the web build.
-        opens: [procraft, png, jpg, jpeg, webp, bmp, gif, tif, tiff, psd]
-        imports: [brush, brushset, abr, kpp, bundle, sut, gbr, pcbrush, pcpalette, gpl, ttf, otf]
-        repo: surfrpt1/procraft
-        license: MIT
-        license_file: LICENSE-MIT
-        copyright: "Copyright (c) 2026 surfrpt1"
-        # What the web build compiles (Cargo.lock: dependency changes; assets: its font and icons): docs, CI and the
-        # mobile file-dialog shim's commits don't rebuild it. One GitHub API request per path per check.
-        paths: [apps/procraft, crates/engine, assets, Cargo.toml, Cargo.lock]
+        blurb: Pressure brushes, layers with blend modes, adjustments, selections, transforms and animation.
+        # Its paintings (.procraft), Procreate's packages and the images and PSDs it opens; brushes (its own, Procreate's,
+        # Photoshop's, Krita's, Clip Studio's, GIMP's), palettes and colour profiles import. This is artcraft-android's
+        # ProCraft, which replaced surfrpt1's (retired and archived: its README names this one as the maintained app), a
+        # different codebase under the same slug. Upstream's releases are Android, Windows and Linux packages (no web zip),
+        # so like Pro Wave it has the head channel only; patches/procreate.yaml adds the web build.
+        opens: [procraft, procreate, psd, psb, png, jpg, jpeg, webp, gif, bmp, tif, tiff]
+        imports: [brush, brushset, abr, gbr, gih, vbr, kpp, bundle, sut, swatches, ase, aco, icc]
+        repo: artcraft-android/procraft
+        license: MIT OR Apache-2.0
+        copyright: "Copyright (c) 2026 ArtCraft Team and the ProCraft contributors"
+        # What the web build compiles (Cargo.lock: dependency changes; the Android app's assets folder holds its fonts and
+        # icons, gradle.properties its version): docs, CI, the Android and iOS apps' code and the plug-ins' sources don't
+        # rebuild it. One GitHub API request per path per check.
+        paths: [crates, desktop, assets, android/app/src/main/assets, android/gradle.properties, Cargo.toml, Cargo.lock]
         patches: patches/procreate.yaml
-        icon: icons/procraft.svg
-        accent: "#C9A227"
-        base: "#0B3D3A"
+        icon: icons/procraft.png
+        accent: "#F07A2E"
+        base: "#0B0B0C"
 
       - slug: aseprite
         name: PixelCraft

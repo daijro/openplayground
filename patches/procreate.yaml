@@ -1,164 +1,258 @@
-# ProCraft in the browser. Upstream (github.com/surfrpt1/procraft) releases Android, iOS and Windows packages only;
-# these patches add the web build Playground serves, from its head commit.
+# ProCraft in the browser. Upstream (github.com/artcraft-android/procraft) releases Android, Windows and Linux packages (no web
+# build) and has no wasm32 code; these patches add the web build Playground serves, from its head commit. It replaces the
+# earlier ProCraft (surfrpt1/procraft, retired and archived: its README names this one as the maintained app), a different and
+# much smaller codebase, under the same slug.
 #
 # patches/procreate/web.diff adds new files only:
-#   index.html, Trunk.toml     the web build at the repository's root (build.mjs builds there): trunk builds the
-#                              `procraft` binary for the page's canvas, and the page keeps a pen's pressure
-#                              (PointerEvent.pressure) for the brushes: egui passes touch force on (Apple Pencil in
-#                              Safari) but not a pen's pointer pressure (a Wacom pen in Chrome).
-#   apps/procraft/src/web.rs   the page's side: `run` starts the desktop's app on the canvas; the open dialogs (Open
-#                              image, Open project, Open PSD, the Gallery's Open…, Reference, and the brush, dual tip,
-#                              palette, palette-from-image, font and GIF imports) are Playground's Open, taking the iOS
-#                              build's route, which waits for the file across frames (rfd-shim's `pick_file` and
-#                              `poll_pick`); the save dialogs give a path in memory at once, and what the app writes
-#                              there goes to Playground's Save As (Files or the device's downloads) after the frame; the
-#                              Gallery lists the paintings in Files; "Open in ProCraft" and dropped files open as the
-#                              matching Open… does (a painting, image or PSD replaces the canvas; brushes, palettes and
-#                              fonts import); what the app writes beside a file from Files (the Gallery's Duplicate)
-#                              goes to Files.
-#   crates/engine/src/playground.rs   what wasm32-unknown-unknown lacks: `std` with web-time's clock, an in-memory
-#                              file system and `HOME` (settings in memory), and the `image` crate's `open`,
-#                              `ImageReader::open` and `save_buffer` through those files. The modules that use them
-#                              take them from it on wasm through ONE `use` line at their end (a local name shadows the
-#                              crate's in that module; everything else in it still comes from the real one).
-# Off on the web: crash recovery (its snapshot stays in memory, so a reloaded page has nothing to offer; Playground
-# warns before leaving unsaved work instead), settings across visits (each page starts with upstream's defaults), the
-# Windows symbol font (the UI uses its plain-text labels, as upstream does elsewhere). Native builds see none of this:
-# every rule adds wasm-only lines, or widens an iOS-only cfg to wasm.
+#   index.html, Trunk.toml      the web build at the repository's root (build.mjs builds there): trunk builds the `procraft`
+#                               binary, the desktop app (desktop/, egui on winit and wgpu) for the page's canvas. index.html also
+#                               keeps a pen's pressure, eraser end and lean (PointerEvents, which winit's web backend hands on as
+#                               the mouse) and passes on files dropped on the page, which winit has no events for.
+#   desktop/src/web.rs          the page's side: `main` on wasm asks the browser for the GPU, then starts the desktop's `main` on
+#                               the canvas (winit's `spawn_app`). Open, Save, Save As, the exports, "Open in ProCraft" and drops are
+#                               Playground's dialogs (`playgroundFiles`): the desktop's file dialogs can't wait for an answer, so the
+#                               open ones ask Playground's Open and answer nothing now, and what it gives comes in as files dropped on
+#                               the window (as a drop and Import do); a save dialog gives a path in memory at once, and what the app
+#                               writes there goes to Playground's Save As after the frame (a painting saved to Files is kept up to
+#                               date there by the next Save, as its Keep in browser storage says). The unsaved state is reported with
+#                               `setUnsaved`: a painting changed since it was saved to Files or downloaded (the gallery the desktop
+#                               keeps paintings in lasts only as long as the page).
+#   crates/engine/src/playground.rs   what wasm32-unknown-unknown lacks: `std` with web-time's clock, an in-memory file system and a
+#                               `HOME`, a temporary folder, threads that run their work where they are started (the page has one
+#                               thread: those that would loop or wait for work don't start), a `PathBuf`'s exists, is_file and is_dir
+#                               from those files (`PathExt`), and a `pollster` that polls once. The
+#                               modules that use them take `std` from it on wasm through ONE `use` line at their end (a local `std`
+#                               shadows the standard library's name in that module; everything else in it still comes from the real
+#                               std).
+#   crates/gpu/src/web.rs       the GPU on a page. The adapter and device can only be asked for without waiting, so the page's start
+#                               asks and `Gpu::create` takes them; and pixels can't be mapped and waited for either, so every read of a
+#                               texture (saves, exports, thumbnails, the eyedropper, selections, transforms) draws it onto a hidden
+#                               canvas twice (its colour, and its alpha as grey) and reads that, which the browser answers by waiting
+#                               for the GPU itself: the pixels come back as they are.
+#   playground-rfd/, playground-arboard/   rfd's and arboard's calls as a page can answer them (see above; no system clipboard).
+#
+# WebGPU only: the brushes' smudge and footprint shaders read storage buffers, which WebGL2 has none of, so a browser without WebGPU
+# says so on the page. Painting runs on the page's one thread (the engine's own `par` and the app's thread pools run where they are
+# called). Measured in Chromium on an NVIDIA Lovelace GPU (a 2048 x 2048 canvas with 3 layers and a background, mouse moves every
+# 8 ms across a few strokes): the display's 60 Hz holds (frames 16.7 ms at the median and the 95th percentile; across two runs the
+# worst frame was 17 and 67 ms). On SwiftShader (a software GPU) it draws about 23 frames a second (33 ms at the median, 83 ms at
+# the 95th percentile). The page's wasm is 27 MB (11.7 MB zipped).
+# A pen's pressure, eraser end and lean reach the brushes (index.html); a mouse paints at full pressure.
+# Off on the web: the time-lapse (a picture after each change, made into a video by the computer's ffmpeg; the Video tab shows nothing
+# recorded), video and PDF import and animated MP4 export (ffmpeg, poppler), the system clipboard (paste a picture or files from
+# outside the app; copy and paste inside it work), writing to or choosing a folder (layer PNG files, model textures), the second
+# display (Project canvas), the computer's own fonts (text is drawn in Inter and egui's fonts), autosave to the gallery, and the
+# crash-and-restart machinery (startup.rs). The gallery and settings live for the page: paintings are kept in Files (Save, Save As).
+# Native builds see none of this: every rule adds wasm-only lines.
 
-# Rules 1-2/33: the wasm-only dependencies, each in a table under a target spelling nobody else uses (`all(...)`), so
-# it never meets one of upstream's: web-time's clock for the engine, and the page's side for the app (eframe and its
-# web runner come from upstream's desktop table, which a browser build matches).
+# The wasm-only dependencies. wgpu gets its WebGPU backend (and Send and Sync for its types, which the app's one
+# plug-in thread needs; there is one thread), naga its WGSL front end (the plug-in filters); rfd and arboard (nothing of
+# the desktop's use of them has a wasm32 version) stay as they are on native and are the page's stand-ins here.
 - file: crates/engine/Cargo.toml
   find: '(?![\s\S])'
-  after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\nweb-time = \"1\"\n"
-- file: apps/procraft/Cargo.toml
+  after: "\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nweb-time = \"1\"\n"
+- file: crates/gpu/Cargo.toml
   find: '(?![\s\S])'
-  after: "\n[target.'cfg(all(target_arch = \"wasm32\"))'.dependencies]\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"Element\", \"HtmlCanvasElement\"] }\n"
+  after: "\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nwgpu = { workspace = true, features = [\"webgpu\", \"fragile-send-sync-non-atomic-wasm\"] }\nnaga = { version = \"30\", default-features = false, features = [\"wgsl-in\"] }\nwasm-bindgen = \"0.2\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"Element\", \"HtmlCanvasElement\", \"CanvasRenderingContext2d\", \"ImageData\"] }\n"
+- file: desktop/Cargo.toml
+  find: '^egui-winit = "0.37"\n'
+  replace: ''
+- file: desktop/Cargo.toml
+  find: '^arboard = .*\n'
+  replace: ''
+- file: desktop/Cargo.toml
+  find: '^rfd = "0.17"\n'
+  replace: ''
+- file: desktop/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/procreate.yaml): the dependencies that have no wasm32 version, native only (the same\n# crates, so the native build's dependency graph is unchanged); and the page's, wasm only.\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\negui-winit = \"0.37\"\nrfd = \"0.17\"\narboard = { version = \"3.6\", default-features = false, features = [\"image-data\"] }\n\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\negui-winit = { version = \"0.37\", default-features = false }\nplayground-rfd = { path = \"../playground-rfd\" }\nplayground-arboard = { path = \"../playground-arboard\" }\nchrono = { version = \"0.4\", default-features = false, features = [\"wasmbind\"] }\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"Element\", \"HtmlCanvasElement\", \"HtmlElement\", \"CssStyleDeclaration\", \"console\"] }\n"
 
-# Rules 3-10/33: the modules that use the clock or files take `std` (and those that hand the `image` crate a path, its
-# `image`) from crates/engine/src/playground.rs on wasm (see the top); the engine declares it, and the app's root also
-# takes web.rs and its `rfd`. Found with: every non-test module that names Instant, fs::, File::, env:: or image::open,
-# ImageReader, save_buffer or .save(. If upstream starts using these in another module, give it the same line; a missing
-# one panics at the first clock call (ProCraft then never gets past "Loading ProCraft…"), or fails that file's open or
-# save ("operation not supported on this platform").
+# The engine declares the std shim (see the top).
 - file: crates/engine/src/lib.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the clock and files std lacks there (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] pub mod playground;\n"
-- file: crates/engine/src/document.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files, the image crate's included (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
-- file: crates/engine/src/document/io.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files, the image crate's included (patches/procreate.yaml). Explicit, as `use super::*` alone makes `std` ambiguous.\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
-- file: crates/engine/src/document/selection.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files (patches/procreate.yaml). Explicit, as `use super::*` alone makes `std` ambiguous.\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
-- file: crates/engine/src/probrush.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files, the image crate's included (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
-- file: crates/engine/src/psd.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
-- file: crates/engine/src/palette.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
-- file: crates/engine/src/brush.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
-- file: apps/procraft/src/settings.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files and HOME (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use procraft_engine::playground::std;\n"
-- file: apps/procraft/src/lib.rs
-  find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the page, its file dialogs, and the clock and files (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")] use procraft_engine::playground::{image, std};\n#[cfg(target_arch = \"wasm32\")] mod web;\n#[cfg(target_arch = \"wasm32\")] use web::rfd;\n"
+  find: '^pub mod abr;\n'
+  before: "// Playground's browser build: the clock, files and threads std lacks there (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub mod playground;\n"
 
-# Rule 11/33: Export tip PNG writes through `image::save_buffer` (the files above) instead of the image's own `save`.
-- file: crates/engine/src/probrush.rs
-  find: '\bimg\.save\(path\)(\.map_err\()'
-  replace: '{ #[cfg(target_arch = "wasm32")] let saved = image::save_buffer(path, &img, img.width(), img.height(), image::ColorType::L8); #[cfg(not(target_arch = "wasm32"))] let saved = img.save(path); saved }$1'
+# The GPU. `Gpu::create` blocks on `pollster::block_on` for the adapter and the device, which a page can't do: they
+# come from the page's start (gpu/src/web.rs), the instance with them. And every read of a texture goes through
+# `start_reading_part`, which waits for the GPU (`poll` and a channel): on the page web.rs answers it at once. The one read that
+# maps a buffer of its own (each layer's alpha at a point) asks the same for each layer.
+- file: crates/gpu/src/lib.rs
+  find: '^mod sphere;\n'
+  after: "#[cfg(target_arch = \"wasm32\")]\npub mod web;\n"
+- file: crates/gpu/src/lib.rs
+  find: '(    pub fn instance_after\(tries: usize\) -> Option<wgpu::Instance> \{\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            return (tries == 0).then(web::instance);\n        }\n"
+- file: crates/gpu/src/lib.rs
+  find: '(    pub fn instance_for_display\([^)]*\) -> Option<wgpu::Instance> \{\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            let _ = display;\n            return (tries == 0).then(web::instance);\n        }\n"
+- file: crates/gpu/src/lib.rs
+  find: '(        let adapter = pollster::block_on\(instance\.request_adapter\([\s\S]*?\.map_err\(\|e\| GpuError::NoAdapter\(e\.to_string\(\)\)\)\?;\n)'
+  replace: "        #[cfg(target_arch = \"wasm32\")]\n        let adapter = web::adapter()?;\n        #[cfg(not(target_arch = \"wasm32\"))]\n$1"
+- file: crates/gpu/src/lib.rs
+  find: '(        let \(device, queue\) = pollster::block_on\(adapter\.request_device\([\s\S]*?\.map_err\(\|e\| GpuError::Device\(e\.to_string\(\)\)\)\?;\n)'
+  replace: "        #[cfg(target_arch = \"wasm32\")]\n        let (device, queue) = web::device()?;\n        #[cfg(not(target_arch = \"wasm32\"))]\n$1"
+- file: crates/gpu/src/canvas.rs
+  find: '(fn start_reading_part\(gpu: &Gpu, texture: &wgpu::Texture, rect: IRect\) -> Readback \{\n)'
+  replace: "$1    #[cfg(target_arch = \"wasm32\")]\n    {\n        return crate::web::read(gpu, texture, rect);\n    }\n"
+- file: crates/gpu/src/canvas.rs
+  find: '(        // one pixel of each layer, each in its own 256-byte row of a buffer\n)'
+  replace: "        #[cfg(target_arch = \"wasm32\")]\n        {\n            let mut read: HashMap<LayerId, u8> = HashMap::new();\n            for id in &ids {\n                let Some(layer) = self.layers.get(id) else { continue };\n                let at = IRect { x0: x as i32, y0: y as i32, x1: x as i32 + 1, y1: y as i32 + 1 };\n                let pixel = crate::web::read(gpu, &layer.texture, at).pixels()?;\n                read.insert(*id, pixel.get(3).copied().unwrap_or(0));\n            }\n            return Ok(paint.iter().filter_map(|id| Some((*id, *read.get(id).or_else(|| parked.get(id))?))).collect());\n        }\n$1"
 
-# Rules 12-15/33: `run` starts the app on the page (web.rs) instead of a window; the window's options, runner and icon
-# have no browser side.
-- file: apps/procraft/src/entry.rs
-  find: '\bpub\s+fn\s+run\s*\(\s*\)\s*\{'
-  before: "#[cfg(target_arch = \"wasm32\")] pub fn run() { web::start() }\n#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/entry.rs
-  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+build_options\s*\(\s*\)\s*->\s*eframe::NativeOptions'
-  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/entry.rs
-  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+run_with\s*\(\s*options\s*:\s*eframe::NativeOptions\s*\)'
-  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/entry.rs
-  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+run_native\s*\(\s*options\s*:\s*eframe::NativeOptions\s*\)'
-  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
-- file: apps/procraft/src/entry.rs
-  find: '(?:\bpub(?:\([a-z]+\))?\s+)?\bfn\s+app_icon\s*\(\s*\)'
-  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+# The modules that use the clock, files, threads or `process::id` take `std` from the std shim on wasm (and `pollster`,
+# where they wait for the GPU). Found with: every non-test module that names Instant, SystemTime, fs::, File::, env::, thread::,
+# process:: or a path's exists, is_file or is_dir, and runs on the page. If upstream starts using these in another module, give it
+# the same line; a missing one panics at the first clock call (the page then stops) or fails that file call ("operation not supported
+# on this platform"). A `Path`'s own `exists`, `is_file` and `is_dir` are the real std's methods, which a shadowed `std` can't
+# reach: they answer no. A `PathBuf`'s answer from the in-memory files where the module takes `PathExt` too (the gallery's folders
+# and an artwork's layer files are looked for that way: without it the gallery lists nothing and an artwork opens with no layers).
+- {file: crates/engine/src/fill.rs, find: &end '(?![\s\S])', after: &cstd "\n// Playground's browser build: the clock, files and threads (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse crate::playground::std;\n"}
+- {file: crates/engine/src/par.rs, find: *end, after: *cstd}
+- {file: crates/engine/src/selection.rs, find: *end, after: *cstd}
+- {file: crates/engine/src/textures.rs, find: *end, after: *cstd}
+- {file: crates/engine/src/usd.rs, find: *end, after: *cstd}
+- {file: crates/engine/src/zip.rs, find: *end, after: *cstd}
+- {file: crates/gpu/src/canvas/plugin_filter.rs, find: *end, after: &std "\n// Playground's browser build: the clock, files and threads (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::std;\n"}
+- {file: crates/core/src/animation.rs, find: *end, after: *std}
+- {file: crates/core/src/device.rs, find: *end, after: *std}
+- {file: crates/core/src/hooks.rs, find: *end, after: *std}
+- {file: crates/core/src/lib.rs, find: *end, after: *std}
+- {file: crates/core/src/plugin_file.rs, find: *end, after: *std}
+- {file: crates/core/src/reveal.rs, find: *end, after: *std}
+- {file: crates/core/src/brush_files.rs, find: *end, after: *std}
+- {file: crates/core/src/brush_library.rs, find: *end, after: *std}
+- {file: crates/core/src/colour.rs, find: *end, after: *std}
+- {file: crates/core/src/crop.rs, find: *end, after: *std}
+- {file: crates/core/src/gallery.rs, find: *end, after: &stdx "\n// Playground's browser build: the clock, files and threads, and a PathBuf's exists, is_file and is_dir from them (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::{PathExt, std};\n"}
+- {file: crates/core/src/gradients.rs, find: *end, after: *std}
+- {file: crates/core/src/grain_store.rs, find: *end, after: *std}
+- {file: crates/core/src/host.rs, find: *end, after: *std}
+- {file: crates/core/src/palettes.rs, find: *end, after: *std}
+- {file: crates/core/src/plugin_run.rs, find: *end, after: *std}
+- {file: crates/core/src/pour.rs, find: *end, after: *std}
+- {file: crates/core/src/project.rs, find: *end, after: *stdx}
+- {file: crates/core/src/projection.rs, find: *end, after: *std}
+- {file: crates/core/src/scene3d.rs, find: *end, after: *std}
+- {file: crates/core/src/studio.rs, find: *end, after: *std}
+- {file: crates/core/src/text_draw.rs, find: *end, after: *std}
+- {file: crates/core/src/timelapse.rs, find: *end, after: *std}
+- {file: crates/core/src/touch.rs, find: *end, after: *std}
+- {file: crates/core/src/transform.rs, find: *end, after: *std}
+- {file: crates/core/src/touch/pen.rs, find: *end, after: *std}
+- {file: desktop/src/actions.rs, find: *end, after: *std}
+- {file: desktop/src/alert.rs, find: *end, after: *std}
+- {file: desktop/src/animated_export.rs, find: *end, after: *std}
+- {file: desktop/src/animation.rs, find: *end, after: *std}
+- {file: desktop/src/canvas_info.rs, find: *end, after: *std}
+- {file: desktop/src/chrome.rs, find: *end, after: *std}
+- {file: desktop/src/colour_drop.rs, find: *end, after: *std}
+- {file: desktop/src/colours.rs, find: *end, after: *std}
+- {file: desktop/src/export_card.rs, find: *end, after: *std}
+- {file: desktop/src/files.rs, find: *end, after: *std}
+- {file: desktop/src/gallery.rs, find: *end, after: *std}
+- {file: desktop/src/gradient_map.rs, find: *end, after: *std}
+- {file: desktop/src/input.rs, find: *end, after: *std}
+- {file: desktop/src/layers.rs, find: *end, after: *std}
+- {file: desktop/src/library.rs, find: *end, after: *std}
+- {file: desktop/src/look.rs, find: *end, after: *std}
+- {file: desktop/src/main.rs, find: *end, after: *std}
+- {file: desktop/src/menu.rs, find: *end, after: *std}
+- {file: desktop/src/overlays.rs, find: *end, after: *std}
+- {file: desktop/src/pen.rs, find: *end, after: *std}
+- {file: desktop/src/prefs.rs, find: *end, after: *std}
+- {file: desktop/src/quick_menu.rs, find: *end, after: *std}
+- {file: desktop/src/reference.rs, find: *end, after: *std}
+- {file: desktop/src/screen.rs, find: *end, after: *std}
+- {file: desktop/src/shortcuts.rs, find: *end, after: *std}
+- {file: desktop/src/sound.rs, find: *end, after: *std}
+- {file: desktop/src/source_editor.rs, find: *end, after: *std}
+- {file: desktop/src/startup.rs, find: *end, after: *std}
+- {file: desktop/src/studio.rs, find: *end, after: *std}
+- {file: desktop/src/system_clipboard.rs, find: *end, after: *std}
+- {file: desktop/src/text.rs, find: *end, after: *std}
+- {file: desktop/src/timelapse.rs, find: *end, after: *std}
+- {file: desktop/src/transform.rs, find: *end, after: *std}
+- {file: desktop/src/ui.rs, find: *end, after: *std}
+- {file: desktop/src/video.rs, find: *end, after: *std}
+- {file: desktop/src/zoom.rs, find: *end, after: *std}
+- {file: crates/gpu/src/lib.rs, find: *end, after: &stdp "\n// Playground's browser build: the clock, files and threads, and no waiting on the GPU (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::{pollster, std};\n"}
+- {file: crates/gpu/src/canvas.rs, find: *end, after: *stdp}
+- {file: crates/core/src/frame.rs, find: *end, after: *stdp}
 
-# Rules 16-31/33: the open dialogs take the iOS build's route on the web, which waits for a file across frames: what
-# kind of file is wanted (PendingOpen), the field holding it, the frame's check of `rfd::poll_pick`, `open_picked`, and
-# each Open…/Import… button's iOS branch (11 of them, one rule each: every rule turns the first one left). The desktop
-# branch beside each still runs, as on Android: its `pick_file` asks Playground's Open and gives nothing now. Found
-# with: grep -c 'pending_open = Some(PendingOpen::' (one more: the frame's check). If upstream drops an Open… button, drop a
-# rule (the build fails until then); if it adds one, add a rule (without, its Open dialog opens nothing).
-- file: apps/procraft/src/files.rs
-  find: '#\[cfg\(any\(target_os = "ios", target_os = "android"\)\)\](\s*#\[derive\([^)]*\)\]\s*(?:pub(?:\([a-z]+\))?\s+)?enum\s+PendingOpen\b)'
-  replace: '#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/pixels.rs
-  find: '#\[cfg\(any\(target_os = "ios", target_os = "android"\)\)\](\s*(?:pub\(crate\)\s+)?fn\s+open_picked\b)'
-  replace: '#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/app.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*(?:pub\(crate\)\s+)?pending_open\s*:\s*Option<PendingOpen>)'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/app.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*pending_open\s*:\s*None\b)'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/app_ui.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*if\s+let\s+Some\(kind\)\s*=\s*self\.pending_open\.take\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/panels.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/panels.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/panels.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/panels.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/file_menu.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/file_menu.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/file_menu.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/timelapse.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/app_ui.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/app_ui.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
-- file: apps/procraft/src/app_ui.rs
-  find: '#\[cfg\(target_os = "ios"\)\](\s*\{\s*let\s+_\s*=\s*rfd::FileDialog::new\(\))'
-  replace: '#[cfg(any(target_os = "ios", target_arch = "wasm32"))]$1'
+# What the one thread can't do as a thread did. Opening an artwork reads its layers on workers that send them over a
+# channel with room for a few: run at once, the first would fill it and wait for a reader that never comes, so it has room for
+# them all. The text's drawing thread waits for work with a Condvar: it draws in the frame. And the time-lapse isn't recorded.
+- file: crates/core/src/lib.rs
+  find: '(            let \(send, receive\) = )(std::sync::mpsc::sync_channel\(workers\);\n)'
+  replace: "            #[cfg(target_arch = \"wasm32\")]\n            let (send, receive) = std::sync::mpsc::channel();\n            #[cfg(not(target_arch = \"wasm32\"))]\n$1$2"
+- file: desktop/src/text.rs
+  find: '(    fn ask\(&mut self, ctx: &egui::Context, job: TextDraw\) \{\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            self.asked += 1;\n            let drawn = job.draw();\n            *self.shared.drawn.lock().unwrap_or_else(PoisonError::into_inner) = Some((self.asked, drawn));\n            ctx.request_repaint();\n            return;\n        }\n"
+# The gallery's thumbnails are read on a thread that waits for what to read (it never starts here): those asked for are read in the
+# frame, once.
+- file: desktop/src/gallery.rs
+  find: 'if reader\.asks\.send\(\(asked\.0\.clone\(\), asked\.1, path\)\)\.is_ok\(\) \{'
+  replace: 'if cfg!(target_arch = "wasm32") || reader.asks.send((asked.0.clone(), asked.1, path)).is_ok() {'
+- file: desktop/src/gallery.rs
+  find: '(    fn thumbnails_read\(&mut self, ctx: &egui::Context\) \{\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            let crisp = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR };\n            for (dir, when) in std::mem::take(&mut self.reading) {\n                let image = crate::files::read_png(&std::path::Path::new(&dir).join(\"thumbnail.png\"))\n                    .ok()\n                    .filter(|image| image.rgba.len() == image.width as usize * image.height as usize * 4)\n                    .map(|image| egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba));\n                let texture = image.map(|pixels| ctx.load_texture(format!(\"thumbnail {dir}\"), pixels, crisp));\n                self.thumbs.insert(dir, (when, texture));\n                ctx.request_repaint();\n            }\n            return;\n        }\n"
+- file: desktop/src/timelapse.rs
+  find: '(    pub fn record\(&mut self, ctx: &egui::Context, session: &Arc<CanvasSession>, idle: bool\) \{\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            let _ = (ctx, session, idle);\n            return;\n        }\n"
 
-# Rule 32/33: a pen's pressure (web.rs, from the page's PointerEvents) comes first where the brushes read the touch
-# force egui passes on. If upstream renames latest_touch_force, follow.
-- file: apps/procraft/src/files.rs
-  find: '\bfn\s+latest_touch_force\s*\(\s*ctx\s*:\s*&egui::Context\s*\)\s*->\s*Option<f32>\s*\{'
-  after: "\n    #[cfg(target_arch = \"wasm32\")] if let Some(p) = web::pen_pressure() { return Some(p); }"
+# The dialogs and the clipboard are the page's stand-ins (playground-rfd and playground-arboard: `rfd` and `arboard`
+# are not dependencies on wasm, so the name is the stand-in's). Found with: every module that names `rfd::` or `arboard::`.
+- {file: desktop/src/animated_export.rs, find: *end, after: &rfd "\n// Playground's browser build: the dialogs a page can't wait for (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse playground_rfd as rfd;\n"}
+- {file: desktop/src/canvas_info.rs, find: *end, after: *rfd}
+- {file: desktop/src/files.rs, find: *end, after: *rfd}
+- {file: desktop/src/layers.rs, find: *end, after: *rfd}
+- {file: desktop/src/reference.rs, find: *end, after: *rfd}
+- {file: desktop/src/source_editor.rs, find: *end, after: *rfd}
+- {file: desktop/src/text.rs, find: *end, after: *rfd}
+- {file: desktop/src/timelapse.rs, find: *end, after: *rfd}
+- {file: desktop/src/ui.rs, find: *end, after: *rfd}
+- {file: desktop/src/source_editor.rs, find: *end, after: &arboard "\n// Playground's browser build: no system clipboard to read (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse playground_arboard as arboard;\n"}
+- {file: desktop/src/system_clipboard.rs, find: *end, after: *arboard}
+- {file: desktop/src/text.rs, find: *end, after: *arboard}
 
-# Rule 33/33: the Gallery's Duplicate looks for a free name through `std::fs` (Path::exists asks the real file system,
-# which has none of the page's files), so it never writes over an earlier copy in Files.
-- file: apps/procraft/src/doc_actions.rs
-  find: 'if\s+!dest\.exists\(\)\s*\{'
-  replace: 'if !(dest.exists() || cfg!(target_arch = "wasm32") && std::fs::metadata(&dest).is_ok()) {'
+# `Path::metadata` (the real std's) gives the real SystemTime, which web-time's epoch can't be taken from: the real std's own.
+- file: desktop/src/canvas_info.rs
+  find: 't\.duration_since\(std::time::UNIX_EPOCH\)'
+  replace: 't.duration_since(::std::time::UNIX_EPOCH)'
+
+# A pen's readings (index.html) are handed to the brushes as X11 hands those of a tablet's pen, which winit gives as the
+# mouse.
+- file: desktop/src/pen.rs
+  find: '^fn set_mouse_pen\('
+  replace: 'pub(crate) fn set_mouse_pen('
+
+# `main` on wasm is web.rs's `start`, which asks for the GPU and then runs the desktop's `main` (now `run`) on the
+# canvas: the window takes the page's canvas (and then follows the page's size), the event loop is winit's `spawn_app` (which doesn't
+# end), the page looks at what came in after each event, and Save keeps the painting in Files instead of the gallery. The log is the
+# browser's console (startup::init is the desktop's, to files and a crash restarter).
+- file: desktop/src/main.rs
+  find: '^mod video;\n'
+  after: "#[cfg(target_arch = \"wasm32\")]\nmod web;\n"
+- file: desktop/src/main.rs
+  find: '^fn main\(\) \{\n'
+  replace: "#[cfg(target_arch = \"wasm32\")]\nfn main() {\n    web::start();\n}\n\n#[cfg(not(target_arch = \"wasm32\"))]\nfn main() {\n    run();\n}\n\nfn run() {\n"
+- file: desktop/src/main.rs
+  find: '^    startup::init\(\);\n'
+  replace: "    #[cfg(not(target_arch = \"wasm32\"))]\n    startup::init();\n"
+- file: desktop/src/main.rs
+  find: '(    event_loop\.set_control_flow\(ControlFlow::Wait\);\n)'
+  replace: "$1    #[cfg(target_arch = \"wasm32\")]\n    web::keep_proxy(event_loop.create_proxy());\n"
+- file: desktop/src/main.rs
+  find: '(\.with_active\(std::env::var_os\("PROCRAFT_BACKGROUND"\)\.is_none\(\)\);\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        let attributes = {\n            use winit::platform::web::WindowAttributesExtWebSys;\n            attributes.with_canvas(web::canvas())\n        };\n"
+- file: desktop/src/main.rs
+  find: 'Ok\(w\) => Arc::new\(w\),\n'
+  replace: "Ok(w) => {\n                #[cfg(target_arch = \"wasm32\")]\n                web::fit();\n                Arc::new(w)\n            }\n"
+- file: desktop/src/main.rs
+  find: '(    fn about_to_wait\(&mut self, event_loop: &ActiveEventLoop\) \{\n)'
+  replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        self.web_after();\n"
+- file: desktop/src/main.rs
+  find: '(            Action::Save => \{\n)                self\.keep_artwork\(\);\n'
+  replace: "$1                #[cfg(target_arch = \"wasm32\")]\n                files::save(session, &mut self.ui, false);\n                #[cfg(not(target_arch = \"wasm32\"))]\n                self.keep_artwork();\n"
+- file: desktop/src/main.rs
+  find: '^    match std::panic::catch_unwind\(std::panic::AssertUnwindSafe\(\|\| event_loop\.run_app\(&mut app\)\)\) \{\n'
+  before: "    #[cfg(target_arch = \"wasm32\")]\n    {\n        // the page's loop, which doesn't end\n        use winit::platform::web::EventLoopExtWebSys;\n        event_loop.spawn_app(app);\n        return;\n    }\n"
