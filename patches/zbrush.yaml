@@ -1,0 +1,151 @@
+# OxyBrush in the browser. Upstream (github.com/crisprintsstuff/OxyBrush) has no browser build (no wasm32 code at all) and no
+# releases with web assets; these patches add the web build Playground serves, from its head commit.
+#
+# patches/zbrush/web.diff adds new files only:
+#   web/index.html, scripts/build-web.sh   the web build (build.mjs runs the script): trunk builds the `oxybrush` binary, the
+#                              desktop's app (crates/oxy-app), for the page's canvas. The repository's own index.html is its
+#                              marketing page, so the page lives in web/.
+#   .cargo/config.toml         getrandom's browser backend (the cfg that goes with its `wasm_js` feature, added below).
+#   crates/oxy-app/src/app/web.rs   the page's side. The desktop's window and event loop are winit's own: winit has a web
+#                              backend, so `main` on wasm builds the same App and hands it to `spawn_app` instead of `run_app`,
+#                              on the canvas of web/index.html. The GPU is asked of the browser (WebGPU), which can't be waited
+#                              for, so the window and surface come first and the rest of the desktop's `init_gfx` follows when
+#                              the answer arrives. Open, Save, Save As, Import and the exports are Playground's dialogs
+#                              (`playgroundFiles`): `rfd` here answers the desktop's dialogs with a file in memory. "Open in
+#                              OxyBrush" and a dropped file open as File > Open does (.oxb, OBJ, STL, .ztl, .zpr; the repository
+#                              has no .ztl sample, so that import is untried on the page). What OxyBrush writes outside /tmp (a
+#                              saved project, an exported mesh) goes to Files after the event, and a save to download is handed
+#                              to the browser once written. The unsaved state is reported with `setUnsaved`.
+#   crates/oxy-mesh/src/playground.rs   what wasm32-unknown-unknown lacks: `std` with web-time's Instant, an in-memory file system,
+#                              a `process::id` and a `thread` whose worker runs where it is spawned. The modules that use them
+#                              take `std` from it on wasm through ONE `use` line at their end (a local `std` shadows the standard
+#                              library's name in that module; everything else in it still comes from the real std).
+#   crates/oxy-io/src/web.rs   tobj's `load_obj` reading that file system.
+#
+# The page needs WebGPU: the viewport draws into a surface whose view format differs from its own (sRGB), which wgpu's WebGL2 backend
+# can't do (Surface::configure panics there), so a browser without WebGPU gets a message instead of the canvas.
+# Threads. A page has one. Sculpting, rayon and the Remesh/Boolean/Merge jobs all run on it: rayon runs where it is called (its own
+# fallback on targets without threads), and a job runs to the end where it is started, so the page stands still while a remesh runs.
+# Measured in headed Chromium on an RTX 4090 (a 240 Hz display), a continuous Draw-brush scribble: the display's 238 fps whatever the
+# mesh, the app's frame taking 1.7 ms on the default sphere (81.9k triangles), 1.6 ms subdivided once (328k) and 1.4 ms twice (1.31M).
+# On SwiftShader (a software GPU, headed; headless gives a blank canvas) the default sphere runs at 5-6 fps (frames of about 200 ms,
+# all in the GPU; the app's own 4 ms), and nothing denser can be shown: its buffers made at creation (mappedAtCreation) fail above
+# about 1.5 MB, a mesh of more than about 45k vertices, so one subdivision level makes the page panic there (real GPUs have no such limit).
+# Pen pressure isn't used: winit's web backend gives a pen as a mouse, and strokes at pressure 0.12, 0.5 and 1 came out identical.
+# Off: the local agent server (MCP: "Could not start the local agent server"), the CLI, the updater (its settings are hidden), Python
+# plug-ins and running a script (they start programs), the plug-in, brush-preset and matcap folders, autosave and crash recovery
+# (they live in the user's data folder), and the settings and keymap files: preferences live for the page. Importing a matcap,
+# alpha, brush preset or keymap, and the OxyCharacter link, are not connected to Files. The log goes to the console only when the
+# app panics. Native builds see none of this: every rule adds wasm-only lines, and the one dependency that moves (egui-winit, which
+# has no clipboard on a page) goes to a native-only table, the same crate and features.
+
+# Upstream pins its toolchain (rust-toolchain.toml), which rustup installs without the wasm target: CI then fails with "can't find
+# crate for `core`". The pin also asks for the target here. If upstream lists `targets` itself (or drops the pin), delete this rule.
+- file: rust-toolchain.toml
+  find: '^\[toolchain\]'
+  after: "\ntargets = [\"wasm32-unknown-unknown\"]"
+
+# The dependencies the page adds, all wasm-only: wgpu's WebGPU backend, wasm-bindgen and the web-sys classes the page
+# uses, web-time (winit's clock type), and getrandom's browser backend (oxy-mcp and oxy-update ask for random bytes). egui-winit's
+# default features pull in arboard, which has no wasm32 build, so on wasm it comes without them (its clipboard stays inside the app).
+- file: crates/oxy-app/Cargo.toml
+  find: '^egui-winit\.workspace = true\n'
+  replace: ""
+- file: crates/oxy-app/Cargo.toml
+  find: '(?![\s\S])'
+  after: |
+
+    # Playground's browser build (patches/zbrush.yaml).
+    [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+    egui-winit.workspace = true
+
+    [target.'cfg(target_arch = "wasm32")'.dependencies]
+    egui-winit = { version = "0.37", default-features = false, features = ["accesskit"] }
+    wgpu = { version = "30", features = ["webgpu"] }
+    wasm-bindgen = "0.2"
+    wasm-bindgen-futures = "0.4"
+    js-sys = "0.3"
+    web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "DragEvent", "DataTransfer", "FileList", "File", "Blob", "console"] }
+    web-time = "1"
+    getrandom = { version = "0.3", features = ["wasm_js"] }
+- file: crates/oxy-mesh/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/zbrush.yaml): std's clock.\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nweb-time = \"1\"\n"
+- file: crates/oxy-mesh/src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: std's clock and files (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub mod playground;\n"
+
+# The updater's HTTPS (ureq, rustls, ring) has no wasm32 build: ureq moves to a native-only table, and the browser's `net` only says
+# the updater is off (the settings hide it, updates::AVAILABLE).
+- file: crates/oxy-update/Cargo.toml
+  find: '^ureq = \{ workspace = true, optional = true \}\n'
+  replace: ""
+- file: crates/oxy-update/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n# Playground's browser build (patches/zbrush.yaml): the same crate, native only.\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\nureq = { workspace = true, optional = true }\n"
+- file: crates/oxy-update/src/lib.rs
+  find: '^#\[cfg\(feature = "network"\)\]\npub mod net;\n'
+  replace: |
+    #[cfg(all(feature = "network", not(target_arch = "wasm32")))]
+    pub mod net;
+
+    // Playground's browser build (patches/zbrush.yaml): no updater on a page.
+    #[cfg(all(feature = "network", target_arch = "wasm32"))]
+    pub mod net {
+        use crate::release::{InstallKind, Update};
+        use crate::version::Version;
+        use std::path::{Path, PathBuf};
+
+        pub fn check(_: &Version, _: InstallKind) -> Result<Option<Update>, String> {
+            Err("the updater is off in the browser".into())
+        }
+
+        pub fn download(_: &Update, _: &Path, _: &mut dyn FnMut(u64, u64)) -> Result<PathBuf, String> {
+            Err("the updater is off in the browser".into())
+        }
+    }
+- file: crates/oxy-app/src/updates.rs
+  find: '^pub const AVAILABLE: bool = cfg!\(feature = "updater"\);'
+  replace: 'pub const AVAILABLE: bool = cfg!(all(feature = "updater", not(target_arch = "wasm32")));'
+# The updater's clock, asked every frame, is std's SystemTime, which panics on a page: the browser's instead.
+- file: crates/oxy-app/src/updates.rs
+  find: '^pub fn now_secs\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: crates/oxy-app/src/updates.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the browser's clock (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub fn now_secs() -> u64 {\n    (js_sys::Date::now() / 1000.0) as u64\n}\n"
+
+# `oxybrush` starts the page on wasm (app/web.rs); the desktop `main` (arguments, a window per backend) stays native.
+- file: crates/oxy-app/src/main.rs
+  find: '^fn main\(\) \{'
+  replace: "#[cfg(target_arch = \"wasm32\")]\nfn main() {\n    app::web::main()\n}\n\n#[cfg(not(target_arch = \"wasm32\"))]\nfn main() {"
+
+# app.rs: the desktop's dialog thread and graphics set-up stay native-only (web.rs has the page's), `about_to_wait` hands over what
+# the page has for the app, and `rfd` and `std` are the page's.
+- file: crates/oxy-app/src/app.rs
+  find: '^    fn spawn_dialog<F>\('
+  before: "    #[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: crates/oxy-app/src/app.rs
+  find: '^    fn init_gfx\('
+  before: "    #[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: crates/oxy-app/src/app.rs
+  find: '^        event_loop\.set_control_flow\(ControlFlow::WaitUntil\(Instant::now\(\) \+ wait\)\);'
+  before: "        #[cfg(target_arch = \"wasm32\")]\n        self.web_sync();\n"
+- file: crates/oxy-app/src/app.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the page's side, and the dialogs, clock and files (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub mod web;\n#[cfg(target_arch = \"wasm32\")]\nuse oxy_mesh::playground::std;\n#[cfg(target_arch = \"wasm32\")]\nuse web::rfd;\n"
+
+# The tobj calls read the path on the real file system; here they read the one in memory.
+- file: crates/oxy-io/src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the files (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod web;\n#[cfg(target_arch = \"wasm32\")]\nuse oxy_mesh::playground::std;\n#[cfg(target_arch = \"wasm32\")]\nuse web::tobj;\n"
+
+# The other modules that use the clock or the files take `std` from the playground module on wasm. Found with: every non-test module
+# that names fs::, Instant, SystemTime or process:: and runs on the page. If upstream starts using these in another module, give it
+# the same line; a missing one panics at the first clock call (the page then stops) or fails the file call (the status line says so).
+- {file: crates/oxy-io/src/scene.rs, find: &end '(?![\s\S])', after: &std "\n// Playground's browser build: the files (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxy_mesh::playground::std;\n"}
+- {file: crates/oxy-doc/src/format.rs, find: *end, after: *std}
+- {file: crates/oxy-doc/src/autosave.rs, find: *end, after: *std}
+- {file: crates/oxy-sculpt/src/lib.rs, find: *end, after: *std}
+- {file: crates/oxy-app/src/editor.rs, find: *end, after: *std}
+- {file: crates/oxy-app/src/ui.rs, find: *end, after: *std}

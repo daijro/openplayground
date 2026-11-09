@@ -623,6 +623,26 @@ groups:
         accent: "#E8743B"
         base: "#3A1808"
 
+      - slug: zbrush
+        name: OxyBrush
+        alternative: ZBrush
+        blurb: Sculpt 3D models like digital clay, with subdivision levels, dynamic detail and ZBrush .ztl import.
+        # Its own projects (.oxb) and ZBrush's tools and projects (.ztl, .zpr: each SubTool becomes a piece); OBJ and STL meshes
+        # import as pieces (SolidCraft's default for those two stays), and exports (.glb, .gltf, .obj, .stl, .ply) go to Files.
+        # Upstream's releases are desktop packages only (no web zip), so like HumanMotionCraft it has the head channel only;
+        # patches/zbrush.yaml adds the web build.
+        opens: [oxb, ztl, zpr]
+        imports: [obj, stl]
+        repo: crisprintsstuff/OxyBrush
+        license: MIT OR Apache-2.0
+        copyright: "Copyright (c) 2026 The OxyBrush Contributors"
+        # What the web build compiles: docs, packaging, scripts and Python add-on commits don't rebuild it.
+        paths: [crates, third_party, Cargo.toml, Cargo.lock]
+        patches: patches/zbrush.yaml
+        icon: icons/oxybrush.png
+        accent: "#E07A4F"
+        base: "#2B1810"
+
   - name: Music
     tools:
       - slug: pro-tools

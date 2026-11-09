@@ -1,0 +1,586 @@
+diff --git a/.cargo/config.toml b/.cargo/config.toml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/.cargo/config.toml
+@@ -0,0 +1,2 @@
++[target.wasm32-unknown-unknown]
++rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+diff --git a/crates/oxy-app/src/app/web.rs b/crates/oxy-app/src/app/web.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/crates/oxy-app/src/app/web.rs
+@@ -0,0 +1,320 @@
++//! OxyBrush in the browser, for Playground (patches/zbrush.yaml in the openplayground repository): the desktop window on the
++//! page's canvas (winit's web backend), and its files in Playground's Files.
++//!
++//! Files live in memory (oxy_mesh::playground's `std::fs`): a file from Files comes in at its path (`browser:/Art/a.oxb` is
++//! `/Art/a.oxb` here), and whatever OxyBrush writes outside /tmp (a save, an export) goes to Files after the event. The desktop's
++//! file dialogs (`rfd`) are Playground's: `rfd` below answers them with a file in memory, as it does for a desktop path.
++//! "Open in OxyBrush" and a dropped file open as File > Open does. Native builds don't compile this.
++use super::*;
++use oxy_mesh::playground::std::{self, fs, path::Path};
++use std::cell::{Cell, RefCell};
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++use winit::platform::web::{EventLoopExtWebSys as _, WindowAttributesExtWebSys as _};
++
++/// Memory only: files from the computer or a drop, and a save to download.
++const TMP: &str = "/tmp";
++const DOWNLOADS: &str = "/tmp/downloads";
++
++thread_local! {
++    /// The GPU state, once the browser has answered the adapter and device requests.
++    static READY: RefCell<Option<Result<Gfx, String>>> = const { RefCell::new(None) };
++    /// Files that came in (Open in, a drop), to open.
++    static OPENED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
++    static PROXY: RefCell<Option<EventLoopProxy<()>>> = const { RefCell::new(None) };
++    /// What Playground was last told (true at first, so the first answer is told).
++    static UNSAVED: Cell<bool> = const { Cell::new(true) };
++}
++
++/// Wakes the event loop (an answer arrived from the page).
++fn wake() {
++    PROXY.with_borrow(|p| p.as_ref().map(|p| p.send_event(())));
++}
++
++fn get(o: &JsValue, k: &str) -> JsValue {
++    js_sys::Reflect::get(o, &k.into()).unwrap_or(JsValue::UNDEFINED)
++}
++
++/// `playgroundFiles[method](...args)`; None when the page has none or it threw.
++fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = Some(get(&js_sys::global(), "playgroundFiles")).filter(JsValue::is_object)?;
++    let f = get(&api, method).dyn_into::<js_sys::Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++async fn wait(v: Option<JsValue>) -> Option<JsValue> {
++    let promise = v?.dyn_into::<js_sys::Promise>().ok()?;
++    wasm_bindgen_futures::JsFuture::from(promise).await.ok().filter(|v| !v.is_null() && !v.is_undefined())
++}
++
++fn options(pairs: &[(&str, JsValue)]) -> JsValue {
++    let o = js_sys::Object::new();
++    for (k, v) in pairs {
++        let _ = js_sys::Reflect::set(&o, &(*k).into(), v);
++    }
++    o.into()
++}
++
++/// A file from Files (`{ path, name, bytes }`) into memory at its path (one from the computer goes to `/tmp`).
++fn bring_in(file: &JsValue) -> Option<PathBuf> {
++    let name = get(file, "name").as_string()?;
++    let path = match get(file, "path").as_string() {
++        Some(p) => PathBuf::from(p.strip_prefix("browser:")?),
++        None => Path::new(TMP).join(Path::new(&name).file_name()?),
++    };
++    fs::put(&path, js_sys::Uint8Array::new(&get(file, "bytes")).to_vec());
++    Some(path)
++}
++
++fn open(path: PathBuf) {
++    OPENED.with_borrow_mut(|o| o.push(path));
++    wake();
++}
++
++/// The loading text over the canvas: a message, or gone.
++fn loading(message: Option<&str>) {
++    let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("oxybrush_loading")) else {
++        return;
++    };
++    match message {
++        Some(m) => el.set_text_content(Some(m)),
++        None => el.remove(),
++    }
++}
++
++/// Playground's dialogs, in place of the desktop's `rfd`. The page asks (Open, or Save As in Files), the answer is a file in memory.
++pub mod rfd {
++    pub use ::rfd::*;
++    use super::*;
++
++    #[derive(Default)]
++    pub struct AsyncFileDialog {
++        name: String,
++        types: Vec<String>,
++    }
++
++    pub struct FileHandle(PathBuf);
++
++    impl FileHandle {
++        pub fn path(&self) -> &Path {
++            &self.0
++        }
++    }
++
++    impl AsyncFileDialog {
++        pub fn new() -> Self {
++            Self::default()
++        }
++
++        pub fn add_filter(mut self, _name: impl Into<String>, extensions: &[impl ToString]) -> Self {
++            for e in extensions {
++                let e = e.to_string().to_ascii_lowercase();
++                if !self.types.contains(&e) {
++                    self.types.push(e);
++                }
++            }
++            self
++        }
++
++        pub fn set_file_name(mut self, name: impl Into<String>) -> Self {
++            self.name = name.into();
++            self
++        }
++
++        pub fn set_parent<W>(self, _: &W) -> Self {
++            self
++        }
++
++        fn types(&self) -> JsValue {
++            self.types.iter().map(|t| JsValue::from(t.as_str())).collect::<js_sys::Array>().into()
++        }
++
++        pub async fn pick_file(self) -> Option<FileHandle> {
++            let answer = wait(call("open", &[options(&[("types", self.types())])])).await?;
++            js_sys::Array::from(&answer).iter().find_map(|f| bring_in(&f)).map(FileHandle)
++        }
++
++        pub async fn save_file(self) -> Option<FileHandle> {
++            let name = if self.name.is_empty() { "Untitled".to_string() } else { self.name.clone() };
++            let answer = wait(call("saveAs", &[options(&[("name", name.as_str().into()), ("types", self.types())])])).await?;
++            let path = match get(&answer, "path").as_string() {
++                Some(p) => PathBuf::from(p.strip_prefix("browser:")?),
++                // Download to device: written to memory, then handed to the browser (web_sync).
++                None => Path::new(DOWNLOADS).join(&name),
++            };
++            Some(FileHandle(path))
++        }
++    }
++}
++
++impl App {
++    /// The desktop's dialog thread can't wait for the page: the page's answer arrives as a future.
++    pub(super) fn spawn_dialog<F>(&mut self, future: F, map: impl FnOnce(Option<PathBuf>) -> DialogReply + 'static)
++    where
++        F: std::future::Future<Output = Option<rfd::FileHandle>> + 'static,
++    {
++        self.dialog_active = true;
++        let tx = self.dialog_tx.clone();
++        wasm_bindgen_futures::spawn_local(async move {
++            let _ = tx.send(map(future.await.map(|h| h.path().to_path_buf())));
++            wake();
++        });
++    }
++
++    /// The window and surface now; the adapter and device are asked of the browser, which can't be waited for, and arrive in `READY`.
++    pub(super) fn init_gfx(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
++        // The shaders and the surface formats are WebGPU's (wgpu's WebGL2 has no surface view formats): without it, say so.
++        let webgpu = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
++            .and_then(|n| js_sys::Reflect::get(&n, &"gpu".into()))
++            .is_ok_and(|gpu| gpu.is_object());
++        if !webgpu {
++            loading(Some("OxyBrush needs WebGPU, which this browser doesn't have (or has turned off)."));
++            return Ok(());
++        }
++        let canvas = web_sys::window()
++            .and_then(|w| w.document())
++            .and_then(|d| d.get_element_by_id("oxybrush_canvas"))
++            .and_then(|c| c.dyn_into::<web_sys::HtmlCanvasElement>().ok())
++            .ok_or("no #oxybrush_canvas")?;
++        let attrs = Window::default_attributes().with_title("OxyBrush").with_canvas(Some(canvas)).with_prevent_default(true);
++        let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
++        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
++            event_loop.owned_display_handle(),
++        )));
++        let surface = instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
++        let ctx = self.egui_ctx.clone();
++        wasm_bindgen_futures::spawn_local(async move {
++            READY.set(Some(gfx(ctx, window, instance, surface).await));
++            wake();
++        });
++        Ok(())
++    }
++
++    /// After every batch of events: the GPU state when it has arrived, the files that came in, what OxyBrush wrote (to Files), and the
++    /// unsaved state.
++    pub(super) fn web_sync(&mut self) {
++        match READY.take() {
++            Some(Ok(g)) => {
++                loading(None);
++                g.window.request_redraw();
++                self.gfx = Some(g);
++            }
++            Some(Err(e)) => loading(Some(&format!("OxyBrush could not start: {e}"))),
++            None => {}
++        }
++        if let Some(g) = &self.gfx {
++            let opened = OPENED.take();
++            if !opened.is_empty() {
++                g.window.request_redraw();
++            }
++            for p in opened {
++                self.editor.open(&p);
++            }
++        }
++        for p in fs::changes() {
++            let (Ok(bytes), Some(name)) = (fs::read(&p), p.file_name()) else { continue };
++            let bytes = js_sys::Uint8Array::from(bytes.as_slice());
++            if p.starts_with(DOWNLOADS) {
++                call("download", &[name.to_string_lossy().as_ref().into(), bytes.into()]);
++                let _ = fs::remove_file(&p);
++            } else if !p.starts_with(TMP) {
++                call("write", &[format!("browser:{}", p.display()).into(), bytes.into()]);
++            }
++        }
++        // A file from the computer or a download has no place in Files: Save asks where.
++        if self.editor.path.as_deref().is_some_and(|p| p.starts_with(TMP)) {
++            self.editor.path = None;
++        }
++        let unsaved = self.editor.is_modified();
++        if UNSAVED.replace(unsaved) != unsaved {
++            call("setUnsaved", &[unsaved.into()]);
++        }
++    }
++}
++
++/// The rest of the desktop's `init_gfx`, once the browser has answered.
++async fn gfx(
++    ctx: egui::Context,
++    window: Arc<Window>,
++    instance: wgpu::Instance,
++    surface: wgpu::Surface<'static>,
++) -> Result<Gfx, String> {
++    let adapter = instance
++        .request_adapter(&wgpu::RequestAdapterOptions {
++            power_preference: wgpu::PowerPreference::HighPerformance,
++            compatible_surface: Some(&surface),
++            force_fallback_adapter: false,
++            apply_limit_buckets: false,
++        })
++        .await
++        .map_err(|e| format!("no compatible GPU adapter: {e}"))?;
++    let (device, queue) = adapter
++        .request_device(&wgpu::DeviceDescriptor {
++            label: Some("oxybrush"),
++            required_limits: adapter.limits(),
++            required_features: adapter.features() & oxy_render::optional_features(),
++            ..Default::default()
++        })
++        .await
++        .map_err(|e| e.to_string())?;
++    let size = window.inner_size();
++    let mut config =
++        surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).ok_or("surface not supported by adapter")?;
++    let view_format = config.format.add_srgb_suffix();
++    for f in [view_format, config.format.remove_srgb_suffix()] {
++        if f != config.format {
++            config.view_formats.push(f);
++        }
++    }
++    config.present_mode = wgpu::PresentMode::AutoVsync;
++    surface.configure(&device, &config);
++    let viewport = ViewportRenderer::new(&device, &queue, view_format);
++    let egui_renderer =
++        egui_wgpu::Renderer::new(&device, config.format.remove_srgb_suffix(), egui_wgpu::RendererOptions::default());
++    let egui_state = egui_winit::State::new(
++        ctx,
++        egui::ViewportId::ROOT,
++        &window,
++        Some(window.scale_factor() as f32),
++        None,
++        Some(device.limits().max_texture_dimension_2d as usize),
++    );
++    Ok(Gfx { window, surface, device, queue, config, view_format, viewport, egui_renderer, egui_state })
++}
++
++/// The page's `main`: the app on the canvas, and Files' "Open in" and drops.
++pub fn main() {
++    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("OxyBrush: {info}").into())));
++    let event_loop = winit::event_loop::EventLoop::builder().build().expect("event loop");
++    let mut app = App::new(None, AutoRun::default(), None);
++    app.set_event_proxy(event_loop.create_proxy());
++    PROXY.set(Some(event_loop.create_proxy()));
++    call(
++        "onOpen",
++        &[Closure::<dyn Fn(JsValue)>::new(|file| {
++            if let Some(path) = bring_in(&file) {
++                open(path);
++            }
++        })
++        .into_js_value()],
++    );
++    if let Some(canvas) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("oxybrush_canvas")) {
++        let over = Closure::<dyn Fn(web_sys::DragEvent)>::new(|e: web_sys::DragEvent| e.prevent_default());
++        let _ = canvas.add_event_listener_with_callback("dragover", over.into_js_value().unchecked_ref());
++        // A dropped file is only a name on the web: its bytes are read, then it opens as "Open in OxyBrush" does.
++        let drop = Closure::<dyn Fn(web_sys::DragEvent)>::new(|e: web_sys::DragEvent| {
++            e.prevent_default();
++            let files = e.data_transfer().and_then(|d| d.files());
++            for f in (0..files.as_ref().map_or(0, |f| f.length())).filter_map(|i| files.as_ref()?.get(i)) {
++                wasm_bindgen_futures::spawn_local(async move {
++                    if let Ok(bytes) = wasm_bindgen_futures::JsFuture::from(f.array_buffer()).await {
++                        let path = Path::new(TMP).join("dropped").join(f.name());
++                        fs::put(&path, js_sys::Uint8Array::new(&bytes).to_vec());
++                        open(path);
++                    }
++                });
++            }
++        });
++        let _ = canvas.add_event_listener_with_callback("drop", drop.into_js_value().unchecked_ref());
++    }
++    event_loop.spawn_app(app);
++}
+diff --git a/crates/oxy-io/src/web.rs b/crates/oxy-io/src/web.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/crates/oxy-io/src/web.rs
+@@ -0,0 +1,17 @@
++//! OxyBrush in the browser, for Playground (patches/zbrush.yaml in the openplayground repository).
++//!
++//! tobj opens an OBJ by its path on the real file system, which a page doesn't have: `tobj` here is tobj with `load_obj` reading
++//! the in-memory file system (oxy_mesh::playground) instead. lib.rs takes it through `use web::tobj;`. Native builds don't compile this.
++
++pub mod tobj {
++    pub use ::tobj::*;
++    use oxy_mesh::playground::std::fs;
++    use std::io::Cursor;
++    use std::path::Path;
++
++    /// `tobj::load_obj` for a file in memory; materials are not read (the importers drop them).
++    pub fn load_obj<P: AsRef<Path>>(path: P, opts: &LoadOptions) -> LoadResult {
++        let bytes = fs::read(path).map_err(|_| LoadError::OpenFileFailed)?;
++        load_obj_buf(&mut Cursor::new(bytes), opts, |_| Err(LoadError::OpenFileFailed))
++    }
++}
+diff --git a/crates/oxy-mesh/src/playground.rs b/crates/oxy-mesh/src/playground.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/crates/oxy-mesh/src/playground.rs
+@@ -0,0 +1,173 @@
++//! OxyBrush in the browser, for Playground (patches/zbrush.yaml in the openplayground repository).
++//!
++//! wasm32-unknown-unknown has no clock, no files and no threads: `Instant::now` and `process::id` panic there and every file
++//! call fails. The modules that use them take `std` from here instead, through one `#[cfg(target_arch = "wasm32")] use
++//! oxy_mesh::playground::std;` line at the end of each (a local `std` shadows the standard library's name in that module;
++//! everything else in it still comes from the real std):
++//!   time     web-time's Instant (SystemTime stays std's: the page asks the browser, see updates.rs);
++//!   fs       an in-memory file system for the calls OxyBrush makes (read, write, rename, create), each write noted for the
++//!            page to mirror to Playground's Files;
++//!   thread   a worker that runs where it is spawned (a page has one thread; the job's result waits in its channel);
++//!   process  a process id.
++//! Native builds don't compile this file.
++
++pub mod std {
++    pub use ::std::*;
++
++    pub mod time {
++        pub use ::std::time::*;
++        pub use web_time::Instant;
++    }
++
++    pub mod process {
++        pub use ::std::process::*;
++
++        pub fn id() -> u32 {
++            1
++        }
++    }
++
++    pub mod thread {
++        pub use ::std::thread::*;
++        use ::std::io;
++
++        pub struct JoinHandle<T>(T);
++
++        impl<T> JoinHandle<T> {
++            pub fn join(self) -> ::std::thread::Result<T> {
++                Ok(self.0)
++            }
++        }
++
++        pub struct Builder;
++
++        impl Builder {
++            pub fn new() -> Self {
++                Builder
++            }
++
++            pub fn name(self, _: String) -> Self {
++                self
++            }
++
++            // ponytail: runs the work at once on the page's thread, so the page stands still while it runs; a Web Worker if that matters.
++            pub fn spawn<F: FnOnce() -> T + Send + 'static, T: Send + 'static>(self, f: F) -> io::Result<JoinHandle<T>> {
++                Ok(JoinHandle(f()))
++            }
++        }
++    }
++
++    pub mod fs {
++        // What isn't here (read_dir, ...) is std's, which fails on a page.
++        pub use ::std::fs::*;
++        use ::std::cell::RefCell;
++        use ::std::collections::{BTreeMap, BTreeSet};
++        use ::std::io::{self, ErrorKind};
++        use ::std::path::{Component, Path, PathBuf};
++
++        #[derive(Default)]
++        struct Files {
++            bytes: BTreeMap<PathBuf, Vec<u8>>,
++            /// Paths written since the last [`changes`].
++            changed: BTreeSet<PathBuf>,
++        }
++
++        thread_local! {
++            static FILES: RefCell<Files> = RefCell::default();
++        }
++
++        /// `/a/./b/../c` -> `/a/c`: one spelling per file (relative paths start at `/`).
++        fn key(p: &Path) -> PathBuf {
++            let mut out = PathBuf::from("/");
++            for c in p.components() {
++                match c {
++                    Component::ParentDir => {
++                        out.pop();
++                    }
++                    Component::Normal(n) => out.push(n),
++                    _ => {}
++                }
++            }
++            out
++        }
++
++        /// Stores a file without noting a change (a file the page brings in from Files or a drop).
++        pub fn put(p: &Path, bytes: Vec<u8>) {
++            FILES.with_borrow_mut(|f| f.bytes.insert(key(p), bytes));
++        }
++
++        /// The paths written since the last call.
++        pub fn changes() -> Vec<PathBuf> {
++            FILES.with_borrow_mut(|f| ::std::mem::take(&mut f.changed).into_iter().collect())
++        }
++
++        pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(p: P, bytes: C) -> io::Result<()> {
++            let p = key(p.as_ref());
++            FILES.with_borrow_mut(|f| {
++                f.bytes.insert(p.clone(), bytes.as_ref().to_vec());
++                f.changed.insert(p);
++            });
++            Ok(())
++        }
++
++        pub fn read<P: AsRef<Path>>(p: P) -> io::Result<Vec<u8>> {
++            FILES
++                .with_borrow(|f| f.bytes.get(&key(p.as_ref())).cloned())
++                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, format!("{} does not exist", p.as_ref().display())))
++        }
++
++        pub fn read_to_string<P: AsRef<Path>>(p: P) -> io::Result<String> {
++            String::from_utf8(read(p)?).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
++        }
++
++        pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
++            let bytes = read(&from)?;
++            // The temporary file never was a change: only its new name is.
++            FILES.with_borrow_mut(|f| {
++                f.bytes.remove(&key(from.as_ref()));
++                f.changed.remove(&key(from.as_ref()));
++            });
++            write(to, bytes)
++        }
++
++        pub fn remove_file<P: AsRef<Path>>(p: P) -> io::Result<()> {
++            FILES
++                .with_borrow_mut(|f| f.bytes.remove(&key(p.as_ref())))
++                .map(|_| ())
++                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no such file"))
++        }
++
++        pub fn create_dir_all<P: AsRef<Path>>(_: P) -> io::Result<()> {
++            Ok(())
++        }
++
++        /// A file being written (`File::create`): what is written is in the file system at once.
++        pub struct File(PathBuf);
++
++        impl File {
++            pub fn create<P: AsRef<Path>>(p: P) -> io::Result<File> {
++                let p = key(p.as_ref());
++                FILES.with_borrow_mut(|f| f.bytes.insert(p.clone(), Vec::new()));
++                Ok(File(p))
++            }
++
++            pub fn sync_all(&self) -> io::Result<()> {
++                Ok(())
++            }
++        }
++
++        impl io::Write for File {
++            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++                FILES.with_borrow_mut(|f| {
++                    f.bytes.entry(self.0.clone()).or_default().extend_from_slice(buf);
++                    f.changed.insert(self.0.clone());
++                });
++                Ok(buf.len())
++            }
++
++            fn flush(&mut self) -> io::Result<()> {
++                Ok(())
++            }
++        }
++    }
++}
+diff --git a/scripts/build-web.sh b/scripts/build-web.sh
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/scripts/build-web.sh
+@@ -0,0 +1,6 @@
++#!/bin/sh
++# OxyBrush's browser build for Playground (patches/zbrush.yaml in the openplayground repository): the page in web/ is built with
++# trunk into the folder given. Run from the repository's root: scripts/build-web.sh <dist>
++set -e
++cd web
++trunk build --release --dist "$1" --public-url ./
+diff --git a/web/Trunk.toml b/web/Trunk.toml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/web/Trunk.toml
+@@ -0,0 +1,6 @@
++# OxyBrush in the browser, for Playground (patches/zbrush.yaml in the openplayground repository).
++# Build with: scripts/build-web.sh <dist>   (from the repository's root)
++[build]
++target = "index.html"
++public_url = "./"
++filehash = true
+diff --git a/web/index.html b/web/index.html
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/web/index.html
+@@ -0,0 +1,20 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
++  <title>OxyBrush</title>
++  <!-- OxyBrush in the browser, for Playground (patches/zbrush.yaml in the openplayground repository). Built by scripts/build-web.sh. -->
++  <link data-trunk rel="rust" href="../crates/oxy-app/Cargo.toml" data-bin="oxybrush" data-wasm-opt="0" />
++  <style>
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1a1a1d; }
++    #oxybrush_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
++    #oxybrush_loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
++      color: #e6e6ea; font: 14px system-ui, sans-serif; text-align: center; padding: 0 16px; pointer-events: none; }
++  </style>
++</head>
++<body>
++  <canvas id="oxybrush_canvas"></canvas>
++  <div id="oxybrush_loading">Loading OxyBrush&hellip;</div>
++</body>
++</html>
