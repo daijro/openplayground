@@ -16,6 +16,7 @@ test('old product URLs redirect to app names, including channels and nested link
   assert.equal(redirects['/fl-studio-mobile/'], '/honeydew/')
   assert.equal(redirects['/fl-studio-mobile/*'], '/honeydew/:splat')
   assert.equal(redirects['/head/fl-studio-mobile'], '/head/honeydew/')
+  assert.equal(redirects['/head/fl-studio-mobile/*'], undefined, 'head wildcards would pass Cloudflare\'s 100-rule limit')
   assert.equal(redirects['/photoshop'], '/photocraft/')
   assert.equal(redirects['/head/photoshop/'], '/photocraft/')
   assert.equal(redirects['/head/photocraft/'], '/photocraft/')

@@ -131,7 +131,8 @@ export const appRedirects = (apps) => {
         const from = `${prefix}/${alias}`
         if (!build || `${from}/` === build.path) continue
         redirects[from] = redirects[`${from}/`] = build.path
-        redirects[`${from}/*`] = `${build.path}:splat`
+        // Nested links under an old /head/ URL aren't followed: the wildcards would pass Cloudflare's 100-rule limit.
+        if (!prefix) redirects[`${from}/*`] = `${build.path}:splat`
       }
     }
   }
