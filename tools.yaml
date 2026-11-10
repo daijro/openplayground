@@ -80,9 +80,9 @@ groups:
         # Open and File > Import do (pictures go into the drawing shown).
         opens: [cdr, cdt, cdrt, cmx, tdraw]
         imports: [svg, svgz, pdf, ai, eps, ps, prn, dxf, emf, wmf, plt, hpgl, hgl, psd, psb, txt, rtf, docx, png, jpg, jpeg, bmp, gif, webp, tif, tiff]
-        repo: igtoth/tracedraw
+        repo: tracedraw/tracedraw
         license: MIT OR Apache-2.0
-        copyright: "Copyright (c) 2026 Ighor Toth and the TraceDraw contributors"
+        copyright: "Copyright (c) 2026 TraceDraw members and contributors"
         patches: patches/coreldraw.yaml
         icon: icons/tracedraw.png
         accent: "#5AC8FF"

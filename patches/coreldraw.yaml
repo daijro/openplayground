@@ -1,4 +1,4 @@
-# TraceDraw in Playground. Upstream (github.com/igtoth/tracedraw) has a browser build of its own, published on its
+# TraceDraw in Playground. Upstream (github.com/tracedraw/tracedraw) has a browser build of its own, published on its
 # GitHub Pages only (its releases are desktop packages: no web zip), so these patches build it from its head commit
 # and connect its files to Playground's Files. Native builds see none of this: every rule adds wasm-only lines.
 #
@@ -50,7 +50,7 @@
   find: 'if\s+!save_as\s*&&\s*!crate::files::WEB\s*\{'
   before: "// Playground: a drawing in its Files saves back there (patches/coreldraw.yaml).\n        #[cfg(target_arch = \"wasm32\")]\n        if let Some(path) = self.file.clone().filter(|p| !save_as && crate::playground::in_files(p)) {\n            self.save_to(path);\n            return;\n        }\n        "
 
-# Rule 7/8: the Help. Upstream's links open its published Help (igtoth.github.io); this build ships the Help of its own
+# Rule 7/8: the Help. Upstream's links open its published Help (tracedraw.github.io); this build ships the Help of its own
 # version next to the page (scripts/build-web.sh, help/), which the links open instead. If upstream renames BASE, follow.
 - file: apps/tracedraw/src/help.rs
   find: 'pub\s+const\s+BASE\s*:\s*&str\s*=\s*"[^"]*";'
