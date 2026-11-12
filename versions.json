@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.23.1+b78e260d",
-  "photoshop@head": "head-7433015+b78e260d",
+  "photoshop@head": "head-bc778cf+b78e260d",
   "illustrator": "v0.24.1+428ea7b9",
   "illustrator@head": "head-81247fd+428ea7b9",
   "coreldraw@head": "head-f8b561a+95fc71db",
@@ -9,7 +9,7 @@
   "lightroom": "v0.21.1+25f4e0aa",
   "lightroom@head": "head-a75497d+25f4e0aa",
   "lightroom-classic": "v26.46.1+ac264267",
-  "lightroom-classic@head": "head-dd6dfcd+ac264267",
+  "lightroom-classic@head": "head-77f2969+ac264267",
   "figma": "v0.18.1+4178f1d5",
   "figma@head": "head-0d6ce11+4178f1d5",
   "fireworks": "v0.2.5+d8029ab1",
