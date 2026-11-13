@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.23.1+b78e260d",
-  "photoshop@head": "head-4a059d9+b78e260d",
+  "photoshop@head": "head-616ec3f+b78e260d",
   "illustrator": "v0.24.1+428ea7b9",
   "illustrator@head": "head-b4505a7+428ea7b9",
   "coreldraw@head": "head-1ad6198+95fc71db",
@@ -27,7 +27,7 @@
   "onenote@head": "head-3a382fe+b6f673d1",
   "notepad@head": "head-d604d99+b486434c",
   "outlook": "v0.12.0+6c42c1ec",
-  "outlook@head": "head-6c8728f+6c42c1ec",
+  "outlook@head": "head-71a6eac+6c42c1ec",
   "acrobat": "v0.21.1+39c8d72c",
   "acrobat@head": "head-be9fe43+39c8d72c",
   "matlab@head": "head-effb421+9d58a9c6",
