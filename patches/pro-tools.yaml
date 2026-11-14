@@ -24,11 +24,9 @@
   file: crates/ui-egui/Cargo.toml
   find: '^\[dependencies\]\n'
   after: "playground-live = { path = \"../../playground-live\", features = [\"egui\"] }\n"
-# Session::alloc, the one id allocator: while connected, an id nobody else adding something at once picks.
-- live: true
-  file: crates/model/src/session.rs
-  find: 'pub\s+fn\s+alloc\s*\(\s*&mut\s+self\s*\)\s*->\s*u64\s*\{'
-  after: "\n        #[cfg(target_arch = \"wasm32\")] if crate::playground_live::connected() { return crate::playground_live::fresh_id(&mut self.next_id); }"
+# (Session::alloc, the one id allocator, moved into the external craft-scraft-format crate, which these rules can't
+# edit; so no rule hooks it any more. If it gains a hook, call playground_live::fresh_id(&mut next_id) from it while
+# playground_live::connected().)
 # The frontend's module, a child of the Edit window's (for its drag preview and lane geometry); SoundApp::run's first
 # step (Undo and Redo go to the session); the session-switch guard (a connected session stays open: no
 # New/Open/Close/Revert or opened bundle replaces it); the others' pointers, selections and gestures under way, drawn

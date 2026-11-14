@@ -8,11 +8,16 @@ new file mode 100644
 +use soundcraft_model::{Clip, Fade};
 +
 +pub(super) use crate::edit_window::automation::plugin_range;
-+pub(super) use crate::edit_window::clips::{clip_name_height, fade_curve_points};
++pub(super) use crate::edit_window::clips::{clip_name_shown, fade_curve_points};
 +pub(super) use crate::edit_window::drag::drag_plan;
 +pub(super) use crate::edit_window::input::midi_clip_span;
 +pub(super) use crate::edit_window::layout::{rect, sample_at, x_of};
 +pub(super) use crate::edit_window::ops;
++
++/// The height the clip name takes at the top of a clip (0 where names are hidden).
++pub(super) fn clip_name_height(s: &soundcraft_model::Session, lane: egui::Rect) -> f32 {
++    if clip_name_shown(s, lane) { 13.0 } else { 0.0 }
++}
 +
 +/// The clip's fades as the Edit window previews them under `gesture` (clips.rs keeps its own private).
 +pub(super) fn clip_preview_fades(clip: &Clip, gesture: Option<&Gesture>) -> (Fade, Fade) {

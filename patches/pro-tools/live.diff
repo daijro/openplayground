@@ -115,7 +115,7 @@ index 0000000..3ef6251
 +use egui::{Color32, Context, Id, LayerId, Order, Painter, Pos2, Rect, Shape, Stroke, Ui, Vec2, pos2, vec2};
 +use serde::Deserialize as _;
 +use serde_json::{Value, json};
-+use soundcraft_audio_io::{BitDepth, EncodeOptions, FileFormat, SampleFormat};
++use craft_audio::{BitDepth, Container, EncodeFormat, EncodeOptions, SampleFormat};
 +use soundcraft_model::playground_live::{self, Live, Presence, presence};
 +use soundcraft_model::{AutoParam, ClipContent, ClipId, EditState, Fade, Session, Source, SourceAudio, SourceId, Track, TrackId, fader_db_to_pos};
 +use std::cell::{Cell, RefCell};
@@ -1006,8 +1006,8 @@ index 0000000..3ef6251
 +    /// The source's audio as a 32-bit float WAV, as a saved bundle carries it.
 +    fn live_read_asset(&self, id: &str) -> Option<Vec<u8>> {
 +        let audio = self.engine.session().pool.get(SourceId(id.parse().ok()?))?;
-+        let wav = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
-+        soundcraft_audio_io::encode(&audio.buffer, &wav).ok()
++        let wav = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Float32).with_dither(false);
++        craft_audio::encode(&audio.buffer, &wav).ok()
 +    }
 +
 +    /// Into the pool, as opening a bundle decodes it, if it is the audio the source describes and none is here yet (a late
@@ -1018,14 +1018,14 @@ index 0000000..3ef6251
 +        let Some(src) = id.parse().ok().and_then(|id| s.source(SourceId(id))) else { return };
 +        let most = src.frames.saturating_mul(u64::from(src.channels)).saturating_mul(4).saturating_add(65536);
 +        let f32_wav = || {
-+            soundcraft_audio_io::detect_format(&bytes, None) == FileFormat::Wav
-+                && soundcraft_audio_io::probe(&bytes, None).is_ok_and(|i| (i.format, i.sample_format) == (FileFormat::Wav, SampleFormat::Float32))
++            craft_audio::detect_container(&bytes, None) == Some(Container::Wav)
++                && craft_audio::probe(&bytes, None).is_ok_and(|i| (i.container, i.sample_format) == (Container::Wav, SampleFormat::Float32))
 +        };
 +        if s.pool.contains(src.id) || bytes.len() as u64 > most || !f32_wav() {
 +            return;
 +        }
-+        let Ok((_, buf)) = soundcraft_audio_io::decode(&bytes, Some("wav")) else { return };
-+        if (buf.num_channels(), buf.frames() as u64, buf.sample_rate) == (usize::from(src.channels), src.frames, src.sample_rate) {
++        let Ok((_, buf)) = craft_audio::decode(&bytes, Some("wav")) else { return };
++        if (buf.channels.len(), buf.frames() as u64, buf.sample_rate) == (usize::from(src.channels), src.frames, src.sample_rate) {
 +            let id = src.id;
 +            self.engine.session_mut().pool.insert(id, Arc::new(SourceAudio::new(buf)));
 +        }
@@ -1119,9 +1119,9 @@ index 0000000..3ef6251
 +    fn imported_audio_travels_by_source_id_and_installs_without_an_edit() {
 +        let with_import = |level: f32, frames: usize| {
 +            let mut app = SoundApp::new(soundcraft_engine::demo::demo_engine(), None, Services::default());
-+            let buf = soundcraft_audio_io::AudioBuffer { sample_rate: 48_000, channels: vec![vec![level; frames]] };
-+            let wav = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Float32, dither: false, bwf: None };
-+            let bytes = soundcraft_audio_io::encode(&buf, &wav).unwrap();
++            let buf = craft_audio::AudioBuffer { sample_rate: 48_000, channels: vec![vec![level; frames]] };
++            let wav = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Float32).with_dither(false);
++            let bytes = craft_audio::encode(&buf, &wav).unwrap();
 +            soundcraft_engine::io::import_audio_bytes(&mut app.engine, "a.wav", &bytes, None, None, 0).unwrap();
 +            app
 +        };
@@ -1134,8 +1134,8 @@ index 0000000..3ef6251
 +        assert_eq!(peer.live_assets(), [(id.clone(), "a.wav".into(), false)], "the peer's own audio under that id is not it");
 +        let doc = canonical(&peer.live_document());
 +        let audio = &owner.engine.session().pool.get(SourceId(id.parse().unwrap())).unwrap().buffer;
-+        let flac = EncodeOptions { format: FileFormat::Flac, bit_depth: BitDepth::Int16, dither: false, bwf: None };
-+        peer.live_write_asset(&id, "a.wav", soundcraft_audio_io::encode(audio, &flac).unwrap());
++        let flac = EncodeOptions::new(EncodeFormat::Flac).with_bit_depth(BitDepth::Int16).with_dither(false);
++        peer.live_write_asset(&id, "a.wav", craft_audio::encode(audio, &flac).unwrap());
 +        assert!(!peer.live_assets()[0].2, "only a float WAV of the source's size is decoded");
 +        peer.live_write_asset(&id, "a.wav", owner.live_read_asset(&id).unwrap());
 +        assert_eq!(peer.live_read_asset(&id), owner.live_read_asset(&id));
