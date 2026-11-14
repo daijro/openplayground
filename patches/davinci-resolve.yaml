@@ -79,6 +79,50 @@
   find: '\[target\.''cfg\(target_arch = "wasm32"\)''\.dependencies\]'
   after: "\nserde.workspace = true\nserde_json.workspace = true"
 
+# app.rs imports picasso_decode::FrameProvider on every target, but picasso-decode is linked off the web only (its
+# one use, frame_at, sits in desktop-gated code). Gate the import. Drop the rule once upstream gates it.
+- file: crates/picasso-ui/src/app.rs
+  find: '^use picasso_decode::FrameProvider;'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\nuse picasso_decode::FrameProvider;"
+
+# The background analyses (stabilization, match move, Color page window tracking) are desktop only: their receiver
+# fields and start_* methods are gated, but the apply_* methods that read the receivers, their call sites and the
+# buttons that start them are not. In the browser nothing runs, so gate the apply_* methods and their calls, and
+# report "not analysing" to the buttons. Drop these rules once upstream gates them.
+- file: crates/picasso-ui/src/app.rs
+  find: '(pub\(crate\) fn apply_stabilization_result\()'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $1"
+- file: crates/picasso-ui/src/app.rs
+  find: '(self\.apply_stabilization_result\(\);)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n        $1"
+- file: crates/picasso-ui/src/app.rs
+  find: '(pub\(crate\) fn apply_match_move_result\()'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $1"
+- file: crates/picasso-ui/src/app.rs
+  find: '(self\.apply_match_move_result\(\);)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n        $1"
+- file: crates/picasso-ui/src/app.rs
+  find: '(pub\(crate\) fn apply_window_track_result\()'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n    $1"
+- file: crates/picasso-ui/src/app.rs
+  find: '(self\.apply_window_track_result\(\);)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n        $1"
+- file: crates/picasso-ui/src/edit_page.rs
+  find: 'self\.stab_rx\.is_some\(\)'
+  replace: '{ #[cfg(not(target_arch = "wasm32"))] { self.stab_rx.is_some() } #[cfg(target_arch = "wasm32")] { false } }'
+- file: crates/picasso-ui/src/edit_page.rs
+  find: 'self\.match_move_rx\.is_some\(\)'
+  replace: '{ #[cfg(not(target_arch = "wasm32"))] { self.match_move_rx.is_some() } #[cfg(target_arch = "wasm32")] { false } }'
+- file: crates/picasso-ui/src/edit_page.rs
+  find: '(self\.start_stabilization_analysis\([^;]*;)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n$1"
+- file: crates/picasso-ui/src/edit_page.rs
+  find: '(self\.start_match_move_analysis\([^;]*;)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n$1"
+- file: crates/picasso-ui/src/color_page/secondary.rs
+  find: '(self\.start_window_tracking\([^;]*;)'
+  replace: "#[cfg(not(target_arch = \"wasm32\"))]\n$1"
+
 # The page-timing run (PICASSO_PERF=pages) is desktop only, and its `page`/`pages` are gated, but the match on `page`
 # is not. Gate the match too. Drop the rule once upstream gates it.
 - file: apps/studio/src/main.rs
