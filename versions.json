@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.23.1+b78e260d",
-  "photoshop@head": "head-cb4cb9a+b78e260d",
+  "photoshop@head": "head-0d3b1e8+b78e260d",
   "illustrator": "v0.24.1+428ea7b9",
   "illustrator@head": "head-ce37ec3+428ea7b9",
   "coreldraw@head": "head-978aa32+95fc71db",
@@ -52,7 +52,7 @@
   "cascadeur@head": "head-5eda21e+750c9164",
   "zbrush@head": "head-1506eee+83463108",
   "pro-tools": "v0.20.1+b267aced",
-  "pro-tools@head": "head-cd7ff05+b267aced",
+  "pro-tools@head": "head-2688cca+90fc50f9",
   "audition@head": "head-b486f32+c15c3839",
   "fl-studio": "v0.0.1-web.26",
   "fl-studio-mobile": "v0.5.4+db4833b7",
