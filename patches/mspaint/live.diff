@@ -286,11 +286,13 @@ index 0000000..54446a9
 +            roots.push(l.id);
 +            // Filters are not shared: a kept layer keeps its own, a new one has none.
 +            let filters = current.layers.get(&l.id).map(|o| o.filters.clone()).map_or_else(|| FilterStack::new(Vec::new()).map_err(invalid), Ok)?;
++            // Nor are styles: a kept layer keeps its own, a new one has none.
++            let styles = current.layers.get(&l.id).map_or_else(Default::default, |o| o.styles.clone());
 +            // Masks are not shared either: a kept layer keeps its own.
 +            let mask = current.layers.get(&l.id).and_then(|o| o.mask.clone());
 +            // Nor are blend modes: a kept layer keeps its own, a new one is Normal.
 +            let blend_mode = current.layers.get(&l.id).map_or(paintcraft_document::LayerBlendMode::Normal, |o| o.blend_mode);
-+            out.insert(l.id, Layer { id: l.id, name: l.name.to_owned(), origin: l.origin, visible: l.visible, opacity: l.opacity, blend_mode, raster, filters, mask });
++            out.insert(l.id, Layer { id: l.id, name: l.name.to_owned(), origin: l.origin, visible: l.visible, opacity: l.opacity, blend_mode, raster, filters, styles, mask });
 +        }
 +        Ok(Document {
 +            document_id: current.document_id,
