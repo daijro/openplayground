@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.23.1+b78e260d",
-  "photoshop@head": "head-b044610+b78e260d",
+  "photoshop@head": "head-fe8c93d+b78e260d",
   "illustrator": "v0.24.1+428ea7b9",
   "illustrator@head": "head-ce37ec3+428ea7b9",
   "coreldraw@head": "head-b9c27c2+95fc71db",
@@ -37,7 +37,7 @@
   "after-effects": "v0.24.1+7bcfac53",
   "after-effects@head": "head-a70eb03+7bcfac53",
   "animate@head": "head-09d7158+3aad456e",
-  "davinci-resolve@head": "head-9525bd2+e5727f1b",
+  "davinci-resolve@head": "head-c606e43+91d44e0b",
   "pluraleyes@head": "head-6693d53+ee7c6f98",
   "autocad": "v0.20.1+ccb3b69c",
   "autocad@head": "head-fbb0838+ccb3b69c",
