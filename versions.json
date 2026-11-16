@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.23.1+b78e260d",
-  "photoshop@head": "head-6f4a2cb+b78e260d",
+  "photoshop@head": "head-d53b5ed+b78e260d",
   "illustrator": "v0.24.1+428ea7b9",
   "illustrator@head": "head-ce37ec3+428ea7b9",
   "coreldraw@head": "head-a224aff+95fc71db",
@@ -47,7 +47,7 @@
   "texturecraft": "v0.6.1+6c42c1ec",
   "texturecraft@head": "head-a559088+6c42c1ec",
   "substance-designer": "v0.4.1+6c42c1ec",
-  "substance-designer@head": "head-fa58e0b+6c42c1ec",
+  "substance-designer@head": "head-ff00b06+6c42c1ec",
   "marvelous-designer@head": "head-16761c5+c0739719",
   "cascadeur@head": "head-5eda21e+750c9164",
   "zbrush@head": "head-17bb701+83463108",
