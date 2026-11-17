@@ -34,6 +34,16 @@
   find: '^(rfd = .*\n)([\s\S]*?)(libloading = .*\n)([\s\S]*?)(ureq = .*\n)([\s\S]*?)(?=^\[profile)'
   replace: "$2$4$6\n# Playground's browser build (patches/aseprite.yaml): the dependencies that have no wasm32 version, native only; and std's clock,\n# the page's canvas and its dialogs, wasm only.\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\n$1$3$5\n[target.'cfg(target_arch = \"wasm32\")'.dependencies]\nweb-time = \"1\"\nwasm-bindgen = \"0.2\"\nwasm-bindgen-futures = \"0.4\"\njs-sys = \"0.3\"\nweb-sys = { version = \"0.3\", features = [\"Window\", \"Document\", \"HtmlCanvasElement\"] }\n\n"
 
+# arboard (the system clipboard) has no wasm32 backend either: it moves to the native-only table too, and src/system_clipboard.rs
+# gets a wasm-only stand-in module of the same name whose every call answers that the clipboard is off (copy and paste then
+# show that as a status; the page's own in-app clipboard is untouched).
+- file: Cargo.toml
+  find: '^(arboard = .*\n)([\s\S]*?)(\[target\.''cfg\(not\(target_arch = "wasm32"\)\)''\.dependencies\]\n)'
+  replace: "$2$3$1"
+- file: src/system_clipboard.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: no system clipboard (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod arboard {\n    const OFF: &str = \"The system clipboard is off in the browser build\";\n    pub struct Clipboard;\n    pub struct ImageData<'a> {\n        pub width: usize,\n        pub height: usize,\n        pub bytes: std::borrow::Cow<'a, [u8]>,\n    }\n    impl Clipboard {\n        pub fn new() -> Result<Self, String> {\n            Err(OFF.into())\n        }\n        pub fn set_image(&mut self, _image: ImageData) -> Result<(), String> {\n            Err(OFF.into())\n        }\n        pub fn get_image(&mut self) -> Result<ImageData<'static>, String> {\n            Err(OFF.into())\n        }\n    }\n}\n"
+
 # The library: Lua is the stub, and the playground module is declared.
 - file: src/lib.rs
   find: '^mod lua;'
@@ -47,8 +57,11 @@
   find: '^pub fn check\('
   before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
 - file: src/updates.rs
+  find: '^pub fn download\('
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: src/updates.rs
   find: '(?![\s\S])'
-  after: "\n// Playground's browser build: the files, and no update check (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n#[cfg(target_arch = \"wasm32\")]\npub fn check(_repository: &str, _ctx: eframe::egui::Context) -> mpsc::Receiver<Result<Release, String>> {\n    let (tx, rx) = mpsc::channel();\n    let _ = tx.send(Err(\"Update checks are off in the browser build.\".into()));\n    rx\n}\n"
+  after: "\n// Playground's browser build: the files, and no update check or download (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n#[cfg(target_arch = \"wasm32\")]\npub fn check(_repository: &str, _ctx: eframe::egui::Context) -> mpsc::Receiver<Result<Release, String>> {\n    let (tx, rx) = mpsc::channel();\n    let _ = tx.send(Err(\"Update checks are off in the browser build.\".into()));\n    rx\n}\n#[cfg(target_arch = \"wasm32\")]\npub fn download(_release: Release, _repository: String, _directory: std::path::PathBuf, _ctx: eframe::egui::Context) -> mpsc::Receiver<Result<VerifiedDownload, String>> {\n    let (tx, rx) = mpsc::channel();\n    let _ = tx.send(Err(\"Updates are off in the browser build.\".into()));\n    rx\n}\n"
 
 # The modules that use the clock or the files take `std` (and `image`, which reads files) from the playground module on wasm.
 # Found with: every non-test module that names fs::, Instant, SystemTime, env:: or process:: and runs on the page, and every
@@ -57,6 +70,12 @@
 - file: src/extensions.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock and files (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
+- file: src/automation.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::std;\n"
+- file: src/fluent.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: this module takes `use super::*`, so it names the shared `std` itself (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use pixelcraft::playground::std;\n"
 - file: src/formats.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the files (patches/aseprite.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::playground::{image, std};\n"
