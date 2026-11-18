@@ -138,6 +138,10 @@ index 0000000..1111111
 +            self
 +        }
 +
++        pub fn set_title(self, _: impl Into<String>) -> Self {
++            self
++        }
++
 +        fn types(&self) -> JsValue {
 +            self.types.iter().map(|t| JsValue::from(t.as_str())).collect::<js_sys::Array>().into()
 +        }
@@ -145,6 +149,12 @@ index 0000000..1111111
 +        pub async fn pick_file(self) -> Option<FileHandle> {
 +            let answer = wait(call("open", &[options(&[("types", self.types())])])).await?;
 +            js_sys::Array::from(&answer).iter().find_map(|f| bring_in(&f)).map(FileHandle)
++        }
++
++        pub async fn pick_files(self) -> Option<Vec<FileHandle>> {
++            let answer = wait(call("open", &[options(&[("types", self.types())])])).await?;
++            let files: Vec<FileHandle> = js_sys::Array::from(&answer).iter().filter_map(|f| bring_in(&f)).map(FileHandle).collect();
++            if files.is_empty() { None } else { Some(files) }
 +        }
 +
 +        pub async fn save_file(self) -> Option<FileHandle> {
@@ -170,6 +180,19 @@ index 0000000..1111111
 +        let tx = self.dialog_tx.clone();
 +        wasm_bindgen_futures::spawn_local(async move {
 +            let _ = tx.send(map(future.await.map(|h| h.path().to_path_buf())));
++            wake();
++        });
++    }
++
++    /// Several files from one dialog, the same way.
++    pub(super) fn spawn_files<F>(&mut self, future: F, map: impl FnOnce(Option<Vec<PathBuf>>) -> DialogReply + 'static)
++    where
++        F: std::future::Future<Output = Option<Vec<rfd::FileHandle>>> + 'static,
++    {
++        self.dialog_active = true;
++        let tx = self.dialog_tx.clone();
++        wasm_bindgen_futures::spawn_local(async move {
++            let _ = tx.send(map(future.await.map(|hs| hs.into_iter().map(|h| h.path().to_path_buf()).collect())));
 +            wake();
 +        });
 +    }

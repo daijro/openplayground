@@ -126,6 +126,9 @@
   find: '^    fn spawn_dialog<F>\('
   before: "    #[cfg(not(target_arch = \"wasm32\"))]\n"
 - file: crates/oxy-app/src/app.rs
+  find: '^    fn spawn_files<F>\('
+  before: "    #[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: crates/oxy-app/src/app.rs
   find: '^    fn init_gfx\('
   before: "    #[cfg(not(target_arch = \"wasm32\"))]\n"
 - file: crates/oxy-app/src/app.rs
