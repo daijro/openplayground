@@ -1,6 +1,6 @@
 {
   "photoshop": "v0.23.1+b78e260d",
-  "photoshop@head": "head-3bc25b0+b78e260d",
+  "photoshop@head": "head-a858d42+b78e260d",
   "illustrator": "v0.24.1+428ea7b9",
   "illustrator@head": "head-ce37ec3+428ea7b9",
   "coreldraw@head": "head-398b671+95fc71db",
@@ -11,7 +11,7 @@
   "lightroom-classic": "v26.47.1+ac264267",
   "lightroom-classic@head": "head-02d8a3d+ac264267",
   "figma": "v0.18.1+4178f1d5",
-  "figma@head": "head-39da85c+4178f1d5",
+  "figma@head": "head-ebb22e9+4178f1d5",
   "fireworks": "v0.2.5+d8029ab1",
   "fireworks@head": "head-79fe275+d8029ab1",
   "mspaint@head": "head-b059492+9cbaf321",
