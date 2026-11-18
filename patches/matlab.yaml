@@ -13,3 +13,14 @@
 - file: crates/engine/Cargo.toml
   find: 'path = "\.\./\.\./\.\./craft-libs/crates/ai"'
   replace: 'path = "../../playground/craft-ai"'
+
+# Rules 3-4: drop craft-quit, the platform-quit hook for native windows (it routes a window close through the OS quit).
+# The web build has no native quit, and the sibling craft-libs can be on another egui than MatCraft (0.36 vs 0.37), which
+# makes `on_close_request(ctx)` a type mismatch. Verify: `check` compiles on both channels. If upstream no longer uses
+# craft-quit these rules fail to match: delete them.
+- file: crates/ui-egui/Cargo.toml
+  find: '^craft-quit\s*=.*\n'
+  replace: ''
+- file: crates/ui-egui/src/**/*.rs
+  find: '^[ \t]*craft_quit::on_close_request\([^;]*\);[ \t]*\n'
+  replace: ''
