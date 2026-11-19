@@ -2,7 +2,7 @@ import { sessionRequest } from './session-room.js'
 export { SessionRoom } from './session-room.js'
 
 // The site's Worker. Requests are served from the static assets (dist/); this script only runs for paths
-// that aren't files, and every 15 minutes (wrangler.jsonc `triggers`), when it starts the GitHub
+// that aren't files, and every hour (wrangler.jsonc `triggers`), when it starts the GitHub
 // workflows that pick up new releases. GitHub's own schedule for them can lag or not fire at all.
 //
 // Needs the GITHUB_TOKEN secret: a fine-grained token for daijro/openplayground with Actions: read and write.

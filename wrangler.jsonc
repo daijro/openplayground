@@ -1,6 +1,6 @@
 // The site's Worker: Cloudflare serves the Vite build as static assets (folders like /photocraft/ get their
 // index.html, and /photocraft redirects to /photocraft/), and worker.js starts the update workflows every
-// 15 minutes.
+// hour.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "openplayground",
@@ -16,7 +16,7 @@
   "migrations": [{ "tag": "peer-sessions-v1", "new_sqlite_classes": ["SessionRoom"] }],
   "ratelimits": [{ "name": "SESSION_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }],
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": ["0 * * * *"]
   },
   // Keep variables set in the dashboard (GITHUB_TOKEN) across deploys, even if saved as plain text.
   "keep_vars": true

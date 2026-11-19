@@ -2,7 +2,7 @@
 
 Use open-source, clean-room alternatives to popular creative and office apps, by [ArtCraft](https://github.com/storytold) and others, in your browser.
 
-Releases are fetched every 15min.
+Releases are fetched every hour.
 
 > [!NOTE]
 > Note: Hardware accelerated GPU is highly recommended!
