@@ -1,0 +1,204 @@
+diff --git a/crates/ui-egui/src/app/files.rs b/crates/ui-egui/src/app/files.rs
+--- a/crates/ui-egui/src/app/files.rs
++++ b/crates/ui-egui/src/app/files.rs
+@@ -672,5 +672,8 @@
+     fn open_dropped_file(&mut self, file: &DroppedFile, placed_picture: &mut bool) -> Result<Value, String> {
+         let name = file.path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| file.name.clone());
++        if name.starts_with("browser:") && self.session.path.as_ref().is_some_and(|p| p.to_string_lossy() == name.as_str()) {
++            return Ok(Value::Null);
++        }
+         let lower = name.to_ascii_lowercase();
+         let data = file.bytes.as_ref().map(|b| wordcraft_engine::cmd::insert::base64_encode(b.as_ref()));
+         let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lower.ends_with(e));
+diff --git a/apps/wordcraft-web/src/web.rs b/apps/wordcraft-web/src/web.rs
+--- a/apps/wordcraft-web/src/web.rs
++++ b/apps/wordcraft-web/src/web.rs
+@@ -112,6 +112,7 @@
+                     );
+
+                     let (intake, sender) = FileIntake::new(Wake::new(waker(&ctx)));
++                    playground::set_intake(sender.clone());
+
+                     // In host mode the parent sends the document to edit; no sample meanwhile.
+                     let sample = app_bridge.is_none() && query().contains("sample");
+diff --git a/apps/wordcraft-web/src/web/playground.rs b/apps/wordcraft-web/src/web/playground.rs
+new file mode 100644
+--- /dev/null
++++ b/apps/wordcraft-web/src/web/playground.rs
+@@ -0,0 +1,172 @@
++//! playground (patches/word.yaml): the bridge between WordCraft's web services and openplayground's
++//! browser file storage, `globalThis.playgroundFiles` (shell/files.js in github.com/daijro/openplayground).
++//! Files reach the app through the framework's file intake, as dropped files do.
++
++use std::cell::RefCell;
++use std::sync::Arc;
++
++use craft::platform::open::{DropTarget, DroppedFile, IntakeSender};
++use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
++use wordcraft_ui_egui::{Services, WordApp};
++
++const DOC_EXTS: &[&str] =
++    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
++const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
++
++thread_local! {
++    /// The app's file intake, kept by `set_intake` when the web entry makes it.
++    static INTAKE: RefCell<Option<IntakeSender>> = const { RefCell::new(None) };
++    /// `browser:` paths the user chose to keep a Save As in; `pump` saves the document to each.
++    static KEPT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
++}
++
++/// Remember the intake the web entry made, for the files the page hands over.
++pub fn set_intake(sender: IntakeSender) {
++    INTAKE.with(|i| *i.borrow_mut() = Some(sender));
++}
++
++/// AutoSave on, and the file services routed through browser storage. Without the shell (a page not
++/// served by openplayground) the app stays as upstream.
++pub fn install(app: WordApp, ctx: &egui::Context) -> WordApp {
++    let mut app = app;
++    app.autosave = true;
++    install_services(&mut app.services, ctx.clone());
++    app
++}
++
++/// Per frame: a Save As the user answered "Keep" runs as `file.save {path}`, which writes the stored file.
++pub fn pump(app: &mut WordApp) {
++    for path in KEPT.with(|k| std::mem::take(&mut *k.borrow_mut())) {
++        if let Err(e) = app.run("file.save", serde_json::json!({"path": path})) {
++            log::error!("playground: saving {path}: {e}");
++        }
++    }
++}
++
++/// Route the app's file services through browser storage. Without the shell nothing changes.
++fn install_services(services: &mut Services, ctx: egui::Context) {
++    if api().is_none() {
++        log::warn!("playground: no playgroundFiles on this page; keeping downloads");
++        return;
++    }
++    let _ = wordcraft_engine::io::WEB_WRITE.set(write);
++    let c = ctx.clone();
++    services.playground_open =
++        Some(Box::new(move |purpose: &str| open(if purpose == "picture" { IMAGE_EXTS } else { DOC_EXTS }, c.clone())));
++    let c = ctx.clone();
++    services.open_path_async = Some(Box::new(move |path: &str| read(path.to_string(), c.clone())));
++    let c = ctx.clone();
++    services.save_as_async = Some(Box::new(move |name: &str, bytes: Vec<u8>| save_as(name, &["docx", "odt", "rtf"], &bytes, c.clone())));
++    on_open(ctx);
++}
++
++fn api() -> Option<JsValue> {
++    js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("playgroundFiles")).ok().filter(JsValue::is_object)
++}
++
++/// `playgroundFiles[method](...args)`; None when the shell is missing or the call threw.
++fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
++    let api = api()?;
++    let f = js_sys::Reflect::get(&api, &JsValue::from_str(method)).ok()?.dyn_into::<js_sys::Function>().ok()?;
++    f.apply(&api, &args.iter().collect::<js_sys::Array>()).ok()
++}
++
++fn object(fields: &[(&str, JsValue)]) -> JsValue {
++    let o = js_sys::Object::new();
++    for (k, v) in fields {
++        let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), v);
++    }
++    o.into()
++}
++
++fn list(items: &[&str]) -> JsValue {
++    items.iter().map(|s| JsValue::from_str(s)).collect::<js_sys::Array>().into()
++}
++
++fn field(v: &JsValue, key: &str) -> JsValue {
++    js_sys::Reflect::get(v, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
++}
++
++/// Await a promise from `call`: None when missing, rejected, or answered null/undefined (cancelled).
++async fn settle(promise: Option<JsValue>) -> Option<JsValue> {
++    let promise = promise?.dyn_into::<js_sys::Promise>().ok()?;
++    match wasm_bindgen_futures::JsFuture::from(promise).await {
++        Ok(v) if !v.is_null() && !v.is_undefined() => Some(v),
++        Ok(_) => None,
++        Err(e) => {
++            log::error!("playground: {e:?}");
++            None
++        }
++    }
++}
++
++/// WEB_WRITE: hand a `browser:` path's bytes to the store, which saves them in the background.
++fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
++    call("write", &[JsValue::from_str(path), js_sys::Uint8Array::from(bytes).into()])
++        .map(|_| ())
++        .ok_or_else(|| format!("{path}: browser storage isn't available"))
++}
++
++/// Queue a file under `name` for the app's next frame, like a dropped one.
++fn deliver_bytes(name: String, bytes: Vec<u8>) {
++    let file = DroppedFile { path: None, name, bytes: Some(Arc::from(bytes)) };
++    INTAKE.with(|i| {
++        if let Some(intake) = i.borrow().as_ref() {
++            intake.dropped(vec![file], DropTarget::Elsewhere);
++        }
++    });
++}
++
++/// A file from the shell ({path, name, bytes}): under its `browser:` path when it has one, so the app
++/// keeps that as the document's path, else under its name.
++fn deliver(file: &JsValue) {
++    let name = field(file, "path").as_string().or_else(|| field(file, "name").as_string()).unwrap_or_else(|| "Document".into());
++    deliver_bytes(name, js_sys::Uint8Array::new(&field(file, "bytes")).to_vec());
++}
++
++fn open(types: &[&str], ctx: egui::Context) {
++    let promise = call("open", &[object(&[("types", list(types))])]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(files) = settle(promise).await else { return };
++        for file in js_sys::Array::from(&files).iter() {
++            deliver(&file);
++        }
++        ctx.request_repaint();
++    });
++}
++
++fn read(path: String, ctx: egui::Context) {
++    let promise = call("read", &[JsValue::from_str(&path)]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(bytes) = settle(promise).await else { return };
++        deliver_bytes(path, js_sys::Uint8Array::new(&bytes).to_vec());
++        ctx.request_repaint();
++    });
++}
++
++/// Ask Keep / Download. Keep → `pump` saves the document to the chosen `browser:` path; Download → the
++/// shell has already downloaded `bytes`.
++fn save_as(name: &str, types: &[&str], bytes: &[u8], ctx: egui::Context) {
++    let options = object(&[("name", JsValue::from_str(name)), ("types", list(types)), ("bytes", js_sys::Uint8Array::from(bytes).into())]);
++    let promise = call("saveAs", &[options]);
++    wasm_bindgen_futures::spawn_local(async move {
++        let Some(answer) = settle(promise).await else { return };
++        let Some(path) = field(&answer, "path").as_string() else { return };
++        KEPT.with(|k| k.borrow_mut().push(path));
++        ctx.request_repaint();
++    });
++}
++
++/// Files the shell hands this app: ?open=browser:/… at startup, and "Open in Word" from Files.
++fn on_open(ctx: egui::Context) {
++    let callback = Closure::<dyn FnMut(JsValue)>::new(move |file: JsValue| {
++        deliver(&file);
++        ctx.request_repaint();
++    });
++    call("onOpen", &[callback.as_ref().clone()]);
++    callback.forget();
++}
++
++/// Rule A: the app's unsaved state, for the page's leave warning; only sent when it changes.
++pub fn report_unsaved(unsaved: bool) {
++    thread_local! { static LAST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) }; }
++    if LAST.with(|last| last.replace(Some(unsaved))) != Some(unsaved) {
++        call("setUnsaved", &[JsValue::from_bool(unsaved)]);
++    }
++}

@@ -1,0 +1,31 @@
+diff --git a/apps/wordcraft-web/src/live/view.rs b/apps/wordcraft-web/src/live/view.rs
+new file mode 100644
+--- /dev/null
++++ b/apps/wordcraft-web/src/live/view.rs
+@@ -0,0 +1,25 @@
++//! Where the canvas puts the pages on screen (patches/word.yaml): the one place the adapter reads the canvas's page
++//! view, which the release keeps in fields and newer commits behind methods.
++
++use egui::{Pos2, Rect};
++use wordcraft_engine::layout::DocLayout;
++use wordcraft_ui_egui::WordApp;
++
++/// The canvas body on screen, once a pass has shown it.
++pub fn canvas_rect(app: &WordApp) -> Option<Rect> {
++    app.canvas.canvas_rect
++}
++
++/// Page `page` on screen in the last pass.
++pub fn page_rect(app: &WordApp, page: usize) -> Option<Rect> {
++    app.canvas.page_rects.get(page).copied()
++}
++
++/// Screen pixels per page point at the canvas's zoom.
++pub fn scale(app: &WordApp) -> f32 {
++    app.canvas.scale
++}
++
++/// Page index and page coordinates (points) under a screen point.
++pub fn page_at(app: &WordApp, layout: &DocLayout, p: Pos2) -> Option<(usize, f32, f32)> {
++    wordcraft_ui_egui::canvas::page_at(&app.canvas.page_rects, layout, app.canvas.scale, p)
++}

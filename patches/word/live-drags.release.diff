@@ -1,0 +1,55 @@
+diff --git a/crates/ui-egui/src/objects/live.rs b/crates/ui-egui/src/objects/live.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/ui-egui/src/objects/live.rs
+@@ -0,0 +1,12 @@
++//! Live editing in a Playground session (patches/word.yaml): a picture, shape or text box being moved, resized or turned
++//! by its frame, for the others to see before it is dropped. A child of `objects` to read its drag.
++
++use crate::WordApp;
++
++/// The dragged object's frame where the drag would put it: its page, `[x, y, w, h]` (page points, unturned) and its angle
++/// (degrees clockwise); `None` until it moves, and for a connector's end.
++pub fn ghost(app: &WordApp) -> Option<(usize, [f32; 4], f32)> {
++    let d = app.canvas.obj_drag.as_ref().filter(|d| d.drag.moved && d.end.is_none())?;
++    let r = d.drag.rect;
++    Some((d.drag.to_page, [r.x, r.y, r.w, r.h], d.drag.deg))
++}
+diff --git a/crates/ui-egui/src/table_resize/live.rs b/crates/ui-egui/src/table_resize/live.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/ui-egui/src/table_resize/live.rs
+@@ -0,0 +1,33 @@
++//! Live editing in a Playground session (patches/word.yaml): a table border (or the table's resize handle) being dragged,
++//! for the others to see before it is let go. A child of `table_resize` to read its drag.
++
++use wordcraft_engine::cmd::table_resize::Edge;
++
++use crate::WordApp;
++
++/// Where the dragged border is now, as this page's own dashed preview shows it: its page and the line `[x0, y0, x1, y1]`
++/// (page points), or with `true` the table's new outline (the handle); `None` until it moves. `ctx` gives the keys held.
++pub fn border(app: &WordApp, ctx: &egui::Context) -> Option<(usize, [f32; 4], bool)> {
++    let d = app.canvas.table_resize.as_ref().filter(|d| (d.to.0 - d.from.0).abs() >= 0.5 || (d.to.1 - d.from.1).abs() >= 0.5)?;
++    let (tg, plan) = (&d.target, d.plan(ctx));
++    let line = match tg.edge {
++        Edge::Column(_) => {
++            // Down the rows it moves in (the selected cells'), else the whole table.
++            let rows = tg.rows.iter().filter(|r| plan.cells.is_empty() || plan.cells.iter().any(|(c, _)| *c == r.row));
++            let (y0, y1) = rows.fold((f32::INFINITY, f32::NEG_INFINITY), |(y0, y1), r| (y0.min(r.top), y1.max(r.bottom)));
++            let x = d.line_now(&plan)?;
++            (y0 <= y1).then_some([x, y0, x, y1])?
++        }
++        Edge::Row(_) => {
++            let y = d.line_now(&plan)?;
++            [tg.left(), y, tg.right(), y]
++        }
++        Edge::Corner => {
++            let (left, top) = (tg.left(), tg.top());
++            let right = plan.widths.as_ref().map_or(tg.right(), |w| left + w.iter().sum::<f32>());
++            let height = |r: &wordcraft_engine::cmd::table_resize::DrawnRow| plan.heights.iter().find(|(i, _)| *i == r.row).map_or(r.bottom - r.top, |(_, h)| *h);
++            [left, top, right, top + tg.rows.iter().map(height).sum::<f32>()]
++        }
++    };
++    Some((d.page, line, matches!(tg.edge, Edge::Corner)))
++}
