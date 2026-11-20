@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { buildId } from './build.mjs'
-import { CHANNELS, COMMIT_FILE, JUNK, alternativeIcon, builtAssets, channelAssets, github, head, installDir, resolveVersion, tools } from './releases.mjs'
+import { CHANNELS, COMMIT_FILE, isJunk, alternativeIcon, builtAssets, channelAssets, github, head, installDir, resolveVersion, tools } from './releases.mjs'
 
 const MAX_FILE = 25 * 1024 * 1024 // the host's per-file limit
 const prelude = readFileSync('scripts/page-prelude.js', 'utf8')
@@ -226,7 +226,7 @@ async function install(t, channel, name) {
 
       // Prepare the finished build in tmp, then sync it in below.
       const next = join(tmp, 'next')
-      for (const f of readdirSync(root)) if (!JUNK.test(f)) cpSync(join(root, f), join(next, f), { recursive: true })
+      for (const f of readdirSync(root)) if (!isJunk(root, f)) cpSync(join(root, f), join(next, f), { recursive: true })
       // Gzip the .wasm files to fit MAX_FILE; page-prelude.js unzips them in the browser. One still over it is
       // split into parts (.wasm.gz.0, .1, …), which the page joins before unzipping.
       // ponytail: EffectCraft's service worker (patch, above) precaches the .wasm.gz by name; list the parts there if

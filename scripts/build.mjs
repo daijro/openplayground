@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { parse } from 'yaml'
 import { LIVE_KIT, applyDiffs, diffDir, installLive, tidyDiffs } from './diffs.mjs'
-import { CHANNELS, JUNK, builtAssets, channelAssets, resolveVersion, tools } from './releases.mjs'
+import { CHANNELS, isJunk, builtAssets, channelAssets, resolveVersion, tools } from './releases.mjs'
 
 const WASM_OPT = process.env.WASM_OPT || 'wasm-opt'
 // Rust's default wasm32 features. wasm-opt reads them from the module's target_features section, which
@@ -168,7 +168,7 @@ const build = async (slug, channel) => {
     run('cargo', ['xtask', 'web'], { cwd: src, env: { ...process.env, CARGO_TARGET_DIR: target, PATH: wasmBindgenPath(src, join(work, 'tools')) } })
     const site = [join(target, 'web', 'dist'), join(target, 'web'), join(target, 'web-site')].find((d) => existsSync(join(d, 'index.html')))
     if (!site) throw new Error('cargo xtask web left no index.html in <target>/web/dist, <target>/web or <target>/web-site')
-    for (const f of readdirSync(site)) if (!JUNK.test(f)) cpSync(join(site, f), join(dist, f), { recursive: true })
+    for (const f of readdirSync(site)) if (!isJunk(site, f)) cpSync(join(site, f), join(dist, f), { recursive: true })
   }
 
   for (const f of readdirSync(dist, { recursive: true }).filter((f) => f.endsWith('.wasm'))) {
