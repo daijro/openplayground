@@ -208,7 +208,8 @@ async function install(t, channel, name) {
     if (compare) ahead = { commits: compare.ahead_by, of: latest.release.tag_name }
   }
 
-  const stamp = JSON.stringify({ tag, label: label ?? tag, date, ahead, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
+  // `install` changes when how a build is installed changes (isJunk, 2026-11-20), so cached installs are redone once.
+  const stamp = JSON.stringify({ install: 2, tag, label: label ?? tag, date, ahead, asset: asset.name, updated_at: asset.updated_at, built: !!(local || ours || previous) }) + '\n'
   if (existsSync(join(dir, '.release')) && readFileSync(join(dir, '.release'), 'utf8') === stamp) {
     console.log(`${name}: ${asset.name} already installed`)
     patch(t, dir)
