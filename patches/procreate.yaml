@@ -136,6 +136,10 @@
 - file: crates/core/src/frame_loop.rs
   find: '_ = shared\.wake\.wait_until\(&mut st, at\)'
   replace: '_ = shared.wake.wait_for(&mut st, at.saturating_duration_since(Instant::now()))'
+# Likewise the time-lapse's `settle` waits on a Condvar until an `Instant`: it waits for the time left.
+- file: crates/core/src/timelapse.rs
+  find: 'self\.inner\.kept\.wait_until\(&mut queue, until\)'
+  replace: 'self.inner.kept.wait_for(&mut queue, until.saturating_duration_since(std::time::Instant::now()))'
 - {file: crates/core/src/colour.rs, find: *end, after: *std}
 - {file: crates/core/src/crop.rs, find: *end, after: *std}
 - {file: crates/core/src/gallery.rs, find: *end, after: &stdx "\n// Playground's browser build: the clock, files and threads, and a PathBuf's exists, is_file and is_dir from them (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::{PathExt, std};\n"}
