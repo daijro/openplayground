@@ -322,7 +322,7 @@ index 0000000..1111111
 +pub fn main() {
 +    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&format!("OxyBrush: {info}").into())));
 +    let event_loop = winit::event_loop::EventLoop::builder().build().expect("event loop");
-+    let mut app = App::new(None, AutoRun::default(), None);
++    let mut app = App::new(Vec::new(), AutoRun::default(), None);
 +    app.set_event_proxy(event_loop.create_proxy());
 +    PROXY.set(Some(event_loop.create_proxy()));
 +    call(
