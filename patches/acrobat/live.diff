@@ -1058,7 +1058,7 @@ index 0000000..bb134c5
 +    let hover = latest.filter(|p| !view.organize && view.viewport_rect().contains(*p));
 +    let gesture = view.comments.gesture.as_ref();
 +    let pressed = ctx.is_some_and(|ctx| ctx.input(|i| i.pointer.primary_down()));
-+    let text = view.selection_quads(info).filter(|_| pressed && gesture.is_none());
++    let text = view.selection_quads(info).into_iter().next().filter(|_| pressed && gesture.is_none());
 +    let page = match gesture {
 +        Some(Gesture::Draw { page, .. } | Gesture::Move { page, .. } | Gesture::Resize { page, .. }) => *page,
 +        _ => (text.as_ref().map(|(page, _)| *page))
