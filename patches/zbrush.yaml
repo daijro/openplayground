@@ -52,12 +52,16 @@
   find: '^egui-winit\.workspace = true\n'
   replace: ""
 - file: crates/oxy-app/Cargo.toml
+  find: '^fs4 = "[^"\n]*"\n'
+  replace: ""
+- file: crates/oxy-app/Cargo.toml
   find: '(?![\s\S])'
   after: |
 
     # Playground's browser build (patches/zbrush.yaml).
     [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
     egui-winit.workspace = true
+    fs4 = "0.13.1"
 
     [target.'cfg(target_arch = "wasm32")'.dependencies]
     egui-winit = { version = "0.37", default-features = false, features = ["accesskit"] }
@@ -138,6 +142,25 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the page's side, and the dialogs, clock and files (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\npub mod web;\n#[cfg(target_arch = \"wasm32\")]\nuse oxy_mesh::playground::std;\n#[cfg(target_arch = \"wasm32\")]\nuse web::rfd;\n"
 
+# fs4 (the `--link` inbox's file lock; rustix/errno have no wasm32 build) is native-only (Cargo.toml above). A page has no other
+# window, so its stand-in `FileExt` always gets the lock. If upstream stops using fs4 here, delete this rule.
+- file: crates/oxy-app/src/bridge/inbox.rs
+  find: '^use fs4::fs_std::FileExt;'
+  replace: |
+    #[cfg(not(target_arch = "wasm32"))]
+    use fs4::fs_std::FileExt;
+
+    #[cfg(target_arch = "wasm32")]
+    trait FileExt {
+        fn try_lock_exclusive(&self) -> std::io::Result<bool>;
+    }
+    #[cfg(target_arch = "wasm32")]
+    impl FileExt for std::fs::File {
+        fn try_lock_exclusive(&self) -> std::io::Result<bool> {
+            Ok(true)
+        }
+    }
+
 # The tobj calls read the path on the real file system; here they read the one in memory.
 - file: crates/oxy-io/src/lib.rs
   find: '(?![\s\S])'
@@ -155,3 +178,11 @@
 - {file: crates/oxy-app/src/document.rs, find: *end, after: *std}
 - {file: crates/oxy-app/src/living.rs, find: *end, after: *std}
 - {file: crates/oxy-app/src/tube.rs, find: *end, after: *std}
+# The `--link` inbox is never used on a page (its files are the real file system's), but app.rs hands it the page's clock: only its
+# `Instant` comes from the playground module, and its file calls stay on the real std.
+- file: crates/oxy-app/src/bridge/inbox.rs
+  find: '^use std::time::'
+  before: "#[cfg(not(target_arch = \"wasm32\"))]\n"
+- file: crates/oxy-app/src/bridge/inbox.rs
+  find: *end
+  after: "\n// Playground's browser build: the page's clock (patches/zbrush.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse oxy_mesh::playground::std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};\n"
