@@ -65,6 +65,14 @@
   find: '^getrandom03\s*=\s*\{[^\n]*\n'
   after: "getrandom04 = { package = \"getrandom\", version = \"0.4\", features = [\"wasm_js\"] }\n"
 
+# Rule 10: upstream's head has a `#[cfg(not(target_arch = "wasm32"))]` meant for staging_dir sitting (above its doc
+# comments) on staging_path, which the wasm build's callers (unfinished_update_note, staging_dir) still use: "cannot find
+# function `staging_path`". Removes that attribute. Verify: `cargo check --target wasm32-unknown-unknown` passes.
+# Matches nothing once upstream fixes it: delete the rule then.
+- file: apps/tracedraw/src/updates.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\n(?=(?:///[^\n]*\n)*fn\s+staging_path\b)'
+  replace: ''
+
 # Rule 8/8: upstream's browser build greets each visit with a message that files open and save by upload and download
 # and that the desktop app is faster; in Playground files are in Files, so it isn't shown. If upstream renames
 # show_web_notice, follow.
