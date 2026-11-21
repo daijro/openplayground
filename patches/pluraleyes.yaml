@@ -21,17 +21,9 @@
 # Not in the browser: MTS, MXF and R3D (they decode through an FFmpeg process), AAF (a Python helper), and the
 # desktop app's own settings, path fixer and imported timelines.
 
-# Rules 1-2/6: 32-bit wasm. `prev_pow2` shifts a usize by 32, which overflows on 32 bits (a compile error there);
-# checked_shr gives 0 there and the same result on 64 bits. If upstream rewrites prev_pow2, check it still compiles
-# for wasm32 and drop these rules if so.
-- file: crates/align-core/src/fine.rs
-  find: '^(\s*)v \|= v >> 32;'
-  replace: '$1v |= v.checked_shr(32).unwrap_or(0);'
-- file: crates/align-core/src/gccphat.rs
-  find: '^(\s*)v \|= v >> 32;'
-  replace: '$1v |= v.checked_shr(32).unwrap_or(0);'
+# (Upstream's prev_pow2 now uses checked_ilog2, which is fine on 32-bit wasm; the old shift rules were dropped.)
 
-# Rule 3/6: a page's worker has one thread (WASI can't start threads): par_map maps in order. Anchored on par_map's
+# Rule 3/4: a page's worker has one thread (WASI can't start threads): par_map maps in order. Anchored on par_map's
 # bounds; if they change, keep the early return first in its body.
 - file: crates/align-core/src/parallel.rs
   find: 'F: Fn\(&T\) -> R \+ Send \+ Sync,\n\{'
