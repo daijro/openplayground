@@ -327,7 +327,7 @@ index 0000000..1111111
 +        }
 +        let tilt = (tilt_x.to_radians().tan().powi(2) + tilt_y.to_radians().tan().powi(2)).sqrt().atan() as f32;
 +        let towards = tilt_x.atan2(-tilt_y) as f32;
-+        crate::pen::set_mouse_pen(Some((crate::pen::MousePen { pressure: pressure as f32, eraser }, (tilt, towards))));
++        crate::pen::set_mouse_pen(Some((crate::pen::MousePen { pressure: pressure as f32, eraser }, Some((tilt, towards)))));
 +    })
 +    .into_js_value();
 +    let _ = js_sys::Reflect::set(&js_sys::global(), &"procraftPen".into(), &pen);
@@ -469,6 +469,14 @@ index 0000000..1111111
 +                } else {
 +                    Err(io::Error::new(io::ErrorKind::Unsupported, "a page has one thread"))
 +                }
++            }
++            /// No thread of a scope's is made on a page: the work is done by whoever asked.
++            pub fn spawn_scoped<'scope, 'env, F: FnOnce() -> T + 'scope, T: 'scope>(
++                self,
++                _scope: &'scope Scope<'scope, 'env>,
++                _f: F,
++            ) -> io::Result<ScopedJoinHandle<'scope, T>> {
++                Err(io::Error::new(io::ErrorKind::Unsupported, "a page has one thread"))
 +            }
 +        }
 +
@@ -1308,6 +1316,9 @@ index 0000000..1111111
 +        Err(Error)
 +    }
 +    pub fn get_image(&mut self) -> Result<ImageData<'static>, Error> {
++        Err(Error)
++    }
++    pub fn set_image(&mut self, _image: ImageData<'_>) -> Result<(), Error> {
 +        Err(Error)
 +    }
 +    pub fn get(&mut self) -> Get {

@@ -96,7 +96,7 @@
   replace: "$1    #[cfg(target_arch = \"wasm32\")]\n    {\n        return crate::web::read(gpu, texture, rect);\n    }\n"
 - file: crates/gpu/src/canvas.rs
   find: '(        // one pixel of each layer, each in its own 256-byte row of a buffer\n)'
-  replace: "        #[cfg(target_arch = \"wasm32\")]\n        {\n            let mut read: HashMap<LayerId, u8> = HashMap::new();\n            for id in &ids {\n                let Some(layer) = self.layers.get(id) else { continue };\n                let at = IRect { x0: x as i32, y0: y as i32, x1: x as i32 + 1, y1: y as i32 + 1 };\n                let pixel = crate::web::read(gpu, &layer.texture, at).pixels()?;\n                read.insert(*id, pixel.get(3).copied().unwrap_or(0));\n            }\n            return Ok(paint.iter().filter_map(|id| Some((*id, *read.get(id).or_else(|| parked.get(id))?))).collect());\n        }\n$1"
+  replace: "        #[cfg(target_arch = \"wasm32\")]\n        {\n            let mut pixels: Vec<u8> = Vec::new();\n            for id in &ids {\n                let Some(layer) = self.layers.get(id) else { continue };\n                let at = IRect { x0: x as i32, y0: y as i32, x1: x as i32 + 1, y1: y as i32 + 1 };\n                match crate::web::read(gpu, &layer.texture, at).pixels() {\n                    Ok(pixel) => pixels.extend(pixel.iter().copied().chain(std::iter::repeat(0)).take(4)),\n                    Err(e) => return PendingAlphas { paint, ids, parked, read: Some(Readback::Failed(format!(\"{e:?}\"))) },\n                }\n            }\n            return PendingAlphas { paint, ids, parked, read: Some(Readback::Ready(pixels)) };\n        }\n$1"
 
 # The modules that use the clock, files, threads or `process::id` take `std` from the std shim on wasm (and `pollster`,
 # where they wait for the GPU). Found with: every non-test module that names Instant, SystemTime, fs::, File::, env::, thread::,
@@ -120,6 +120,22 @@
 - {file: crates/core/src/reveal.rs, find: *end, after: *std}
 - {file: crates/core/src/brush_files.rs, find: *end, after: *std}
 - {file: crates/core/src/brush_library.rs, find: *end, after: *std}
+- {file: crates/core/src/brush_libraries.rs, find: *end, after: *std}
+- {file: crates/core/src/app_log.rs, find: *end, after: *std}
+- {file: crates/core/src/brush_pictures.rs, find: *end, after: *std}
+- {file: crates/core/src/clipboard.rs, find: *end, after: *std}
+- {file: crates/core/src/frame_loop.rs, find: *end, after: *std}
+- {file: crates/core/src/guide.rs, find: *end, after: *std}
+- {file: crates/core/src/held.rs, find: *end, after: *std}
+- {file: crates/core/src/plugin_artwork.rs, find: *end, after: *std}
+# The frame loop (which never starts here) waits on a Condvar until an `Instant` of the shimmed clock; parking_lot's `wait_until`
+# takes std's, so it waits for the time left instead. If upstream moves the waits, shim what the compiler names.
+- file: crates/core/src/frame_loop.rs
+  find: 'shared\.wake\.wait_until\(&mut st, at\)\.timed_out\(\)'
+  replace: 'shared.wake.wait_for(&mut st, at.saturating_duration_since(Instant::now())).timed_out()'
+- file: crates/core/src/frame_loop.rs
+  find: '_ = shared\.wake\.wait_until\(&mut st, at\)'
+  replace: '_ = shared.wake.wait_for(&mut st, at.saturating_duration_since(Instant::now()))'
 - {file: crates/core/src/colour.rs, find: *end, after: *std}
 - {file: crates/core/src/crop.rs, find: *end, after: *std}
 - {file: crates/core/src/gallery.rs, find: *end, after: &stdx "\n// Playground's browser build: the clock, files and threads, and a PathBuf's exists, is_file and is_dir from them (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::{PathExt, std};\n"}
@@ -187,9 +203,6 @@
 # What the one thread can't do as a thread did. Opening an artwork reads its layers on workers that send them over a
 # channel with room for a few: run at once, the first would fill it and wait for a reader that never comes, so it has room for
 # them all. The text's drawing thread waits for work with a Condvar: it draws in the frame. And the time-lapse isn't recorded.
-- file: crates/core/src/lib.rs
-  find: '(            let \(send, receive\) = )(std::sync::mpsc::sync_channel\(workers\);\n)'
-  replace: "            #[cfg(target_arch = \"wasm32\")]\n            let (send, receive) = std::sync::mpsc::channel();\n            #[cfg(not(target_arch = \"wasm32\"))]\n$1$2"
 - file: desktop/src/text.rs
   find: '(    fn ask\(&mut self, ctx: &egui::Context, job: TextDraw\) \{\n)'
   replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            self.asked += 1;\n            let drawn = job.draw();\n            *self.shared.drawn.lock().unwrap_or_else(PoisonError::into_inner) = Some((self.asked, drawn));\n            ctx.request_repaint();\n            return;\n        }\n"
@@ -226,10 +239,7 @@
   replace: 't.duration_since(::std::time::UNIX_EPOCH)'
 
 # A pen's readings (index.html) are handed to the brushes as X11 hands those of a tablet's pen, which winit gives as the
-# mouse.
-- file: desktop/src/pen.rs
-  find: '^fn set_mouse_pen\('
-  replace: 'pub(crate) fn set_mouse_pen('
+# mouse (web.diff calls pen::set_mouse_pen, which upstream now makes pub(crate) itself).
 
 # `main` on wasm is web.rs's `start`, which asks for the GPU and then runs the desktop's `main` (now `run`) on the
 # canvas: the window takes the page's canvas (and then follows the page's size), the event loop is winit's `spawn_app` (which doesn't
