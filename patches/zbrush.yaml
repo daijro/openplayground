@@ -152,3 +152,6 @@
 - {file: crates/oxy-sculpt/src/lib.rs, find: *end, after: *std}
 - {file: crates/oxy-app/src/editor.rs, find: *end, after: *std}
 - {file: crates/oxy-app/src/ui.rs, find: *end, after: *std}
+- {file: crates/oxy-app/src/document.rs, find: *end, after: *std}
+- {file: crates/oxy-app/src/living.rs, find: *end, after: *std}
+- {file: crates/oxy-app/src/tube.rs, find: *end, after: *std}
