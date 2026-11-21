@@ -347,6 +347,11 @@ index 0000000..1d6d12d
 +    let timeline = ExportTimeline::from_result_with_options(&result, options).map_err(|e| e.to_string())?;
 +    std::fs::create_dir_all(&r.directory).map_err(|e| e.to_string())?;
 +    let cancel = AtomicBool::new(false);
++    let export_options = align_decode::export::ExportOptions {
++        formats: r.formats.clone(),
++        correct_drift: r.drift,
++        ..Default::default()
++    };
 +    let artifacts = PIPELINE
 +        .with(|p| {
 +            align_decode::export::export_prepared_many(
@@ -354,14 +359,7 @@ index 0000000..1d6d12d
 +                    backend: p.backend(),
 +                    timelines: std::slice::from_ref(&timeline),
 +                    directory: &r.directory,
-+                    formats: &r.formats,
-+                    correct_drift: r.drift,
-+                    include_replaced_sequence: false,
-+                    include_media_files: false,
-+                    aaf_frame_duration: None,
-+                    include_fcpxml_timeline: true,
-+                    include_fcpxml_multicam: true,
-+                    group_fcpxml_storylines: false,
++                    options: &export_options,
 +                    cancel: &cancel,
 +                },
 +                Some(&mut |p: align_decode::export::ExportJobProgress| {
