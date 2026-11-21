@@ -378,7 +378,7 @@ index 0000000..e30bbeb
 +pub(super) fn spawn() -> DiskThread {
 +    let (tx, rx) = mpsc::channel();
 +    WORK.set(Some((rx, Vec::new())));
-+    DiskThread { tx, handle: None }
++    DiskThread { tx, handle: None, load: Default::default() }
 +}
 +
 +/// One turn of the streaming loop: new clips registered, every clip's ring topped up.

@@ -129,6 +129,16 @@
 - file: crates/prowave-app/src/file_browser.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: no folder dialog (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+- file: crates/prowave-app/src/drum_machine_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: Playground's file dialogs (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+- file: crates/prowave-app/src/space_designer_ui.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: Playground's file dialogs (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")] use crate::web::rfd;\n"
+# No file manager on the web: the command is built but never started (`spawn` fails on wasm).
+- file: crates/prowave-app/src/file_commands.rs
+  find: '\bfn\s+reveal_command\s*\([^)]*\)\s*->\s*std::process::Command\s*\{'
+  after: "\n    #[cfg(target_arch = \"wasm32\")] return { let _ = path; std::process::Command::new(\"xdg-open\") };"
 # Audio input (capture.rs): upstream leaves it out on wasm, but the app uses InputSource and MAX_INPUT_CHANNELS
 # everywhere, so the module is built on the web too (its std from crates/prowave-playground like the others). If
 # upstream gates the app's use of it instead, delete these three rules.
@@ -145,7 +155,30 @@
   find: '\bpub\s+const\s+CUSTOM\s*:\s*bool\s*=\s*([^;]+);'
   replace: 'pub const CUSTOM: bool = $1 && !cfg!(target_arch = "wasm32");'
 
-# Live editing in Playground sessions (patches/logic-pro/live.diff + the playground-live crate, tools.yaml `live_kit`)
+# Plug-in hosting (crates/prowave-plugin-host, -ladspa, -vamp) loads native libraries through `libloading`, whose `Library` does not
+# exist on wasm. On the web a stand-in `libloading` module (lib.rs) that never finds a library is used by the two
+# loaders (vst3.rs, clap.rs), so no plug-in loads; start_module has no body on wasm and refuses. If upstream gates
+# the crate or its loaders on wasm itself, delete these rules.
+- file: crates/prowave-ladspa/src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: no native libraries (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod libloading {\n    pub struct Library;\n    pub struct Symbol<T>(core::convert::Infallible, core::marker::PhantomData<T>);\n    impl<T> core::ops::Deref for Symbol<T> {\n        type Target = T;\n        fn deref(&self) -> &T { match self.0 {} }\n    }\n    impl Library {\n        pub unsafe fn new<P>(_: P) -> Result<Library, String> { Err(\"no native libraries on the web\".to_string()) }\n        pub unsafe fn get<T>(&self, _: &[u8]) -> Result<Symbol<T>, String> { Err(\"no native libraries on the web\".to_string()) }\n    }\n}\n"
+- file: crates/prowave-vamp/src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: no native libraries (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod libloading {\n    pub struct Library;\n    pub struct Symbol<T>(core::convert::Infallible, core::marker::PhantomData<T>);\n    impl<T> core::ops::Deref for Symbol<T> {\n        type Target = T;\n        fn deref(&self) -> &T { match self.0 {} }\n    }\n    impl Library {\n        pub unsafe fn new<P>(_: P) -> Result<Library, String> { Err(\"no native libraries on the web\".to_string()) }\n        pub unsafe fn get<T>(&self, _: &[u8]) -> Result<Symbol<T>, String> { Err(\"no native libraries on the web\".to_string()) }\n    }\n}\n"
+- file: crates/prowave-plugin-host/src/lib.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: no native libraries (patches/logic-pro.yaml).\n#[cfg(target_arch = \"wasm32\")]\nmod wasm_libloading {\n    pub struct Library;\n    pub struct Symbol<T>(core::convert::Infallible, core::marker::PhantomData<T>);\n    impl<T> core::ops::Deref for Symbol<T> {\n        type Target = T;\n        fn deref(&self) -> &T { match self.0 {} }\n    }\n    impl Library {\n        pub unsafe fn new<P>(_: P) -> Result<Library, String> { Err(\"no native libraries on the web\".to_string()) }\n        pub unsafe fn get<T>(&self, _: &[u8]) -> Result<Symbol<T>, String> { Err(\"no native libraries on the web\".to_string()) }\n    }\n}\n"
+- file: crates/prowave-plugin-host/src/vst3.rs
+  find: '(?![\s\S])'
+  after: "\n#[cfg(target_arch = \"wasm32\")] use crate::wasm_libloading as libloading;\n"
+- file: crates/prowave-plugin-host/src/clap.rs
+  find: '(?![\s\S])'
+  after: "\n#[cfg(target_arch = \"wasm32\")] use crate::wasm_libloading as libloading;\n"
+- file: crates/prowave-plugin-host/src/vst3.rs
+  find: '\bunsafe\s+fn\s+start_module\s*\([^)]*\)\s*->\s*bool\s*\{'
+  after: "\n    #[cfg(not(any(unix, windows)))] return { let _ = (library, path); false };"
+
+# Live editing in Playground sessions (patches/logic-pro/live.diff +the playground-live crate, tools.yaml `live_kit`)
 # What it's for: people in a Playground session work on the same project at once: tracks (adding, removing, stacking,
 #   names, instruments and patches, mute and solo, volume, pan, sends, inspector values), regions (adding, moving,
 #   repeating, resizing, removing, their inspector values) and notes, the tempo, signature, key and master volume reach
