@@ -393,12 +393,7 @@ index 0000000..f4394fb
 +                        CTX.with(|c| c.set(cc.egui_ctx.clone()).ok());
 +                        cc.egui_ctx.add_bytes_loader(std::sync::Arc::new(Files));
 +                        let session = Session::new(Path::new(ROOT), Settings::at(SETTINGS)).map_err(|e| e.to_string())?;
-+                        // A fresh browser starts with the same bundled Welcome notebook as the desktop app.
-+                        let first = !had && !invited();
-+                        let mut app = NoteCraftApp::new(session);
-+                        if first {
-+                            app.add_welcome();
-+                        }
++                        let app = NoteCraftApp::new(session);
 +                        Ok(Box::new(Web { app, persist, unsaved: None }))
 +                    }),
 +                )
