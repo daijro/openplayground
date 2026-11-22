@@ -6,5 +6,13 @@
 #   scripts/build-web.sh   build.mjs runs it: trunk in web/ (upstream's web crate, outside the Cargo workspace), as
 #                          upstream's `cargo xtask dist --web` runs it, but with relative paths (the app is served from
 #                          its own folder) and without trunk's own wasm-opt (build.mjs runs -O3 on the result).
-# No rules: the app needs no source changes.
-[]
+# patches/fireworks/web.head.diff is web.diff plus the deletion of rust-toolchain.toml (head pins a compiler without
+#   the wasm32 target; the toolchain on PATH has it). If head drops that file, make it a copy of web.diff.
+#
+# Rule: the workspace root is where build.mjs runs `cargo check --target wasm32-unknown-unknown` (it only finds a web
+# crate under apps/), and the native-only xtask member (std::os::unix) can't compile for wasm. default-members limits
+# that check to the web crate. How to verify: `node scripts/build.mjs check fireworks release`. If upstream moves the
+# web crate or makes xtask wasm-clean, delete the rule.
+- file: Cargo.toml
+  find: '^members\s*=\s*\[[^\n]*\]'
+  after: "\ndefault-members = [\"web\"]"

@@ -1,0 +1,41 @@
+diff --git a/rust-toolchain.toml b/rust-toolchain.toml
+deleted file mode 100644
+index 0000000..0000000
+--- a/rust-toolchain.toml
++++ /dev/null
+@@ -1,19 +0,0 @@
+-# The toolchain is pinned here, not just in the workflows.
+-#
+-# The CI workflows install `toolchain: 1.99.1` (decision 0102) and the
+-# CI image is `rust:1.99.1-slim-bookworm`, so the pipelines judge the
+-# same compiler. This file is the third side of that triangle: it pins
+-# the compiler a developer's box runs, so `cargo run -p xtask -- ci`
+-# means the same thing on a laptop and on the runner.
+-#
+-# The two compilers already disagree about the same source. On 1.99.0
+-# clippy does not fire `chunks_exact_to_as_chunks`; on 1.99.1 it does,
+-# so a contributor on the older patch gets a green clippy that CI
+-# rejects, and the coverage floor is measured by a compiler that is not
+-# the one the floors were measured with.
+-#
+-# Bump this file and the workflows' `toolchain:` in the same change,
+-# and re-bless the coverage floor only when the measurement itself
+-# moves (decision 0102).
+-[toolchain]
+-channel = "1.99.1"
+diff --git a/scripts/build-web.sh b/scripts/build-web.sh
+new file mode 100755
+index 0000000..abf4291
+--- /dev/null
++++ b/scripts/build-web.sh
+@@ -0,0 +1,10 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: MIT OR Apache-2.0
++# Playground's build of FireCraft's web bundle (patches/fireworks.yaml in github.com/daijro/openplayground), into the
++# folder given ($1): trunk in web/, as upstream's `cargo xtask dist --web` runs it, but with relative paths (the app is
++# served from its own folder) and without trunk's own wasm-opt (Playground's build runs wasm-opt -O3 on the result).
++set -euo pipefail
++DIST=$(realpath -m "$1")
++cd "$(dirname "$0")/../web"
++sed -i 's/data-wasm-opt="[^"]*"/data-wasm-opt="0"/' index.html
++trunk build --release --dist "$DIST" --public-url ./
