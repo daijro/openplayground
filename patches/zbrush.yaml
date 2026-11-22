@@ -161,6 +161,24 @@
         }
     }
 
+# The alpha library's directory lock uses fs4 too; the page has no user alpha folder, so the stand-in lock always succeeds.
+- file: crates/oxy-app/src/alpha_library.rs
+  find: '^use fs4::fs_std::FileExt;'
+  replace: |
+    #[cfg(not(target_arch = "wasm32"))]
+    use fs4::fs_std::FileExt;
+
+    #[cfg(target_arch = "wasm32")]
+    trait FileExt {
+        fn lock_exclusive(&self) -> std::io::Result<()>;
+    }
+    #[cfg(target_arch = "wasm32")]
+    impl FileExt for std::fs::File {
+        fn lock_exclusive(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
 # The tobj calls read the path on the real file system; here they read the one in memory.
 - file: crates/oxy-io/src/lib.rs
   find: '(?![\s\S])'
