@@ -73,6 +73,17 @@
   find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\n(?=(?:///[^\n]*\n)*fn\s+staging_path\b)'
   replace: ''
 
+# Rule 11: upstream's head gates settings::work_dir (and work_dir_beside) to non-wasm builds, but clipboard.rs calls it
+# unconditionally: "cannot find function `work_dir` in module `crate::settings`". Removes those two attributes (std's
+# current_exe just returns Err on wasm). Verify: `cargo check --target wasm32-unknown-unknown` passes. Matches nothing
+# once upstream fixes it: delete the rule then.
+- file: apps/tracedraw/src/settings.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\n(?=pub\s+fn\s+work_dir\s*\()'
+  replace: ''
+- file: apps/tracedraw/src/settings.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\n(?=fn\s+work_dir_beside\b)'
+  replace: ''
+
 # Rule 8/8: upstream's browser build greets each visit with a message that files open and save by upload and download
 # and that the desktop app is faster; in Playground files are in Files, so it isn't shown. If upstream renames
 # show_web_notice, follow.
