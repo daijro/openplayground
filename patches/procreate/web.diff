@@ -1430,15 +1430,27 @@ index 0000000..1111111
 +    Error,
 +}
 +
-+#[derive(Clone, Copy, PartialEq, Eq)]
++#[derive(Clone, PartialEq, Eq)]
 +pub enum MessageDialogResult {
 +    Ok,
++    Yes,
++    No,
++    Cancel,
++    Custom(String),
++}
++
++#[derive(Clone, PartialEq, Eq)]
++pub enum MessageButtons {
++    Ok,
++    OkCancelCustom(String, String),
 +}
 +
 +#[derive(Default)]
 +pub struct MessageDialog {
 +    title: String,
 +    text: String,
++    confirm: bool,
++    custom: Option<String>,
 +}
 +
 +impl MessageDialog {
@@ -1456,11 +1468,27 @@ index 0000000..1111111
 +        self.text = text.into();
 +        self
 +    }
-+    /// The browser's own alert (it does wait).
++    pub fn set_buttons(mut self, buttons: MessageButtons) -> Self {
++        self.confirm = matches!(buttons, MessageButtons::OkCancelCustom(..));
++        self.custom = match buttons {
++            MessageButtons::OkCancelCustom(ok, _) => Some(ok),
++            MessageButtons::Ok => None,
++        };
++        self
++    }
++    /// The browser's own alert or confirm (they do wait).
 +    pub fn show(self) -> MessageDialogResult {
-+        if let Some(window) = web_sys::window() {
-+            let _ = window.alert_with_message(&format!("{}\n\n{}", self.title, self.text));
++        let text = format!("{}\n\n{}", self.title, self.text);
++        let Some(window) = web_sys::window() else { return MessageDialogResult::Ok };
++        if self.confirm {
++            let yes = window.confirm_with_message(&text).unwrap_or(false);
++            return match (yes, self.custom) {
++                (true, Some(ok)) => MessageDialogResult::Custom(ok),
++                (true, None) => MessageDialogResult::Ok,
++                (false, _) => MessageDialogResult::Cancel,
++            };
 +        }
++        let _ = window.alert_with_message(&text);
 +        MessageDialogResult::Ok
 +    }
 +}
