@@ -34,7 +34,7 @@
 #   console has no "Invalid ShaderModule \"sc_viewport\"" warnings. Then the same with ?webgl.
 # If upstream changes: put the directive first in whatever WGSL source the viewport's shader module is built
 #   from; delete this rule if upstream adds it or moves the derivatives out of the branch.
-- file: [crates/ui-egui/src/**/*.rs, assets/shaders/viewport.wgsl]
+- file: [crates/ui-egui/src/**/*.rs, assets/shaders/viewport.wgsl, crates/viewport-gpu/shaders/viewport.wgsl]
   find: 'const SHADER: &str = r#"\n|^(?=\s*struct U \{)'
   after: "diagnostic(off, derivative_uniformity);\n"
 
@@ -77,7 +77,13 @@
 - live: true
   file: apps/*-web/Cargo.toml
   find: '^\[dependencies\]\n'
-  after: "playground-live = { path = \"../../playground-live\", features = [\"egui\"] }\n"
+  after: "playground-live = { path = \"../../playground-live\", features = [\"egui\"] }\nsolidcraft-theme = { workspace = true }\n"
+# The placement a drag of a part in the viewport is moving (the gesture's box is drawn around it): upstream keeps it
+# private in occurrence_drag::Drag, so one accessor at the end of that file hands it over.
+- live: true
+  file: crates/ui-egui/src/occurrence_drag.rs
+  find: '(?![\s\S])'
+  after: "\n/// Live editing in a Playground session: the exact path of the placement being dragged, if a drag is under way.\npub fn live_path(app: &SolveApp) -> Option<Vec<u64>> {\n    app.viewport.occurrence_drag.as_ref().map(|d| d.path.clone())\n}\n"
 # The web entry keeps its runner for the session, and the app it starts is the Shell wrapped by live::wrap in live::App
 # (which delegates every eframe::App method, then runs the session's frame hook, gives the runner `as_any_mut`, and
 # reaches the SolveApp through the two accessors given here). If upstream renames Shell or its `app` field (the
@@ -115,9 +121,10 @@
   find: '(?![\s\S])'
   after: "\n// Live editing in a Playground session: the open designs, for the web app.\n#[path = \"documents_live.rs\"]\npub mod live;\n"
 # The start page lists the session's designs ("In this session", one row each, a click shows it or opens it again
-# where it was closed) above Recent. Verify: in a session, close a shared design's tab, open Home: its row says
-# "Closed here" and a click opens it again. If upstream moves Recent, anchor on the start page's next section.
+# where it was closed) above the start page, on its Start section (upstream's start_page::show draws the whole
+# page, so the list can't go between its sections). Verify: in a session, close a shared design's tab, open Home:
+# its row says "Closed here" and a click opens it again. If upstream moves the page, anchor on the call that shows it.
 - live: true
   file: crates/ui-egui/src/home.rs
-  find: '^[ \t]*(?:FileView::)?section\(\s*ui\s*,[^\n]*[Rr]ecent'
-  before: "#[cfg(target_arch = \"wasm32\")] if let Some(list) = crate::LIVE_HOME.get() { list(app, ui); }\n"
+  find: '^[ \t]*let page = start_page::Page\b'
+  before: "#[cfg(target_arch = \"wasm32\")] if matches!(app.home.section, Section::Start) { if let Some(list) = crate::LIVE_HOME.get() { list(app, ui); } }\n"

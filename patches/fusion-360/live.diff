@@ -169,7 +169,7 @@ index 00000000..4657069a
 +        GESTURE.set(g);
 +    }
 +    ON_SHARED.set(active_doc(app).is_some() || SHARED.with_borrow(|sh| sh.docs.is_empty()));
-+    presence::set_font(solidcraft_ui_egui::fonts::semibold(12.0));
++    presence::set_font(solidcraft_ui_egui::ui_kit::type_face::semibold(12.0));
 +    draw(app, ctx);
 +    tab_dots(app, ctx);
 +    presence::end_frame(ctx);
@@ -747,7 +747,7 @@ index 00000000..4657069a
 +            });
 +            out.extend(lines_json(lines.collect(), MAX_POINTS).map(|v| ("band".to_string(), v)));
 +        }
-+        if let Some((_, depth, _)) = &app.viewport.point_drag
++        if let Some((_, depth, ..)) = &app.viewport.point_drag
 +            && let Some(before) = app.session.undo.get(*depth).and_then(|u| u.doc.sketch(sid).ok())
 +            && let Ok(now) = app.session.doc.sketch(sid)
 +        {
@@ -786,8 +786,7 @@ index 00000000..4657069a
 +            out.insert(key.into(), v);
 +        }
 +    }
-+    if let Some(m) = &app.tree.occurrence_move {
-+        let path = if m.path.is_empty() { vec![m.occurrence] } else { m.path.clone() };
++    if let Some(path) = solidcraft_ui_egui::occurrence_drag::live_path(app) {
 +        let own = std::mem::replace(&mut app.session.selection, vec![Sel::Occurrence { path }]);
 +        if let Some(b) = viewport::selection_bounds(app).filter(|b| !b.is_empty()) {
 +            out.insert("box".into(), boxed(&b));
@@ -1091,7 +1090,7 @@ index 00000000..4657069a
 +    if rows.is_empty() {
 +        return;
 +    }
-+    let t = solidcraft_ui_egui::theme::Tokens::get();
++    let t = solidcraft_theme::Tokens::get();
 +    ui.label(egui::RichText::new("In this session").size(15.0).strong().color(t.text));
 +    ui.add_space(8.0);
 +    let mut chosen = None;
