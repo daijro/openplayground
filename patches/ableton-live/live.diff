@@ -333,7 +333,7 @@ index 0000000..9f13962
 +        self.history.gesture = None;
 +        self.live_decode();
 +        let shift = suhina_engine::SceneShift::between(&scenes, &self.project.launcher);
-+        self.update_player(shift).map_err(|e| e.0)?;
++        self.update_player(shift).map_err(String::from)?;
 +        self.send_armed();
 +        Ok(())
 +    }
@@ -364,7 +364,7 @@ index 0000000..9f13962
 +        let path = file_at(&self.live_folder(), name).ok_or("not a file name")?;
 +        live_files_impl::put(&path, bytes);
 +        if self.live_decode() {
-+            self.update_player(None).map_err(|e| e.0)?;
++            self.update_player(None).map_err(String::from)?;
 +        }
 +        Ok(())
 +    }

@@ -39,6 +39,19 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: no plug-in hosts there (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::interprocess;\n"
 
+# Rules 3a-3c: real-time thread priority has no browser side (`thread-priority` doesn't build for wasm32: no libc): its
+# crate line moves into a native-only table, and on wasm the priority stays normal (the browser's audio thread is not
+# ours to raise). If upstream drops the dependency or gates it itself, drop these rules.
+- file: crates/realtime/Cargo.toml
+  find: '^thread-priority\s*=[^\n]*\n'
+  replace: ''
+- file: crates/realtime/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\nthread-priority = \"3.1.1\"\n"
+- file: crates/realtime/src/lib.rs
+  find: '\bthread_priority::set_current_thread_priority\(\s*thread_priority::ThreadPriority::Max\s*\)'
+  replace: "{\n            #[cfg(not(target_arch = \"wasm32\"))] { thread_priority::set_current_thread_priority(thread_priority::ThreadPriority::Max) }\n            #[cfg(target_arch = \"wasm32\")] { Err::<(), ()>(()) }\n        }"
+
 # Rules 4-17/92: crates/playground as a wasm-only dependency of each crate whose modules take its std (crates/plugins
 # has it from the rules above), under a target spelling nobody else uses (`all(...)`), so it never meets a table of
 # upstream's. A crate upstream adds that needs the clock or files gets one more such rule.
@@ -101,6 +114,12 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
 - file: crates/engine/src/chain.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/engine/src/pool.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
+- file: crates/engine/src/sends.rs
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: the clock, files and threads (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::std;\n"
 - file: crates/engine/src/clock.rs
@@ -261,11 +280,8 @@
 # from the page's (no backups are written in the browser, but backup.rs's clock must be the page's: every Session
 # makes a backup state at once). If upstream renames them, follow.
 - file: crates/session/src/backup.rs
-  find: '\bfn\s+date_time\s*\(\s*written\s*:\s*SystemTime\s*\)\s*->\s*String\s*\{'
-  after: "\n    #[cfg(target_arch = \"wasm32\")] let written = suhina_playground::std_time(written);"
-- file: crates/session/src/backup.rs
-  find: '\bfn\s+clock_time\s*\(\s*written\s*:\s*SystemTime\s*\)\s*->\s*String\s*\{'
-  after: "\n    #[cfg(target_arch = \"wasm32\")] let written = suhina_playground::std_time(written);"
+  find: '\bfn\s+local\s*\(\s*time\s*:\s*SystemTime\s*\)\s*->\s*jiff::ZonedDateTime\s*\{'
+  after: "\n    #[cfg(target_arch = \"wasm32\")] let time = suhina_playground::std_time(time);"
 
 # Rules 73-77/92: files in memory where a call asks the real file system (Path::is_file, canonicalize): the project's
 # audio is found (`locate`, inside the project's folder, no links, answered by crates/playground) and decoded,
@@ -283,9 +299,12 @@
 - file: crates/session/src/files.rs
   find: 'if\s+!absolute\.is_file\(\)'
   replace: 'if !std::fs::metadata(&absolute).is_ok_and(|m| m.is_file())'
-- file: crates/session/src/relink.rs
-  find: '!loaded\s*\|\|\s*!missing\.last_path\.is_file\(\)'
-  replace: '!loaded || !std::fs::metadata(&missing.last_path).is_ok_and(|m| m.is_file())'
+- file: crates/media/src/lib.rs
+  find: '\bpath\.is_file\(\)\.then\(\|\|\s*path\.to_path_buf\(\)\)'
+  replace: 'std::fs::metadata(path).is_ok_and(|m| m.is_file()).then(|| path.to_path_buf())'
+- file: crates/media/src/lib.rs
+  find: '\bpath\.is_file\(\)\.then\(\|\|\s*path\.to_path_buf\(\)\)'
+  replace: 'std::fs::metadata(path).is_ok_and(|m| m.is_file()).then(|| path.to_path_buf())'
 
 # Rules 83-84/92: two session modules that keep clock times which cross into modules already on the browser's clock (the
 # export's plug-in state deadline, a device file's modified time): same one `use` line.
@@ -429,11 +448,11 @@
   before: "#[cfg(target_arch = \"wasm32\")] crate::app::live::drawn_notes(&drawn);\n    "
 - live: true
   file: crates/ui/src/detail/piano_roll.rs
-  find: 'draw\(ui,\s*&layout,\s*clip,\s*state,\s*grid,\s*preview,\s*shape\.played\(\)\);'
+  find: '(?<![\w:])draw\(ui,[^;]*?&layout,[^;]*?shape\.played\(\)\);'
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::piano(ui, &clip.address, layout.grid, layout.key_height, &|b| layout.x_of(b), &|x| layout.beat_at(x), &|k| layout.y_of(k), &|y| layout.key_at(y));"
 - live: true
   file: crates/ui/src/session/mixer_strip.rs
-  find: 'let\s+db\s*=\s*volume_drag\([^;]*?\);\s*paint_fader\(ui,\s*painter,\s*readout,\s*fader,\s*db,\s*&response(?:,\s*[^;]*?)?\);'
+  find: 'let\s+db\s*=\s*volume_drag\([^;]*?\);\s*paint_fader\(ui,\s*painter,\s*readout,\s*fader,\s*(?:[^;,]*,\s*)?db,\s*&response(?:,\s*[^;]*?)?\);'
   after: "\n    #[cfg(target_arch = \"wasm32\")] crate::app::live::fader(painter, column.track, fader);"
 - live: true
   file: crates/ui/src/session/mixer_strip.rs

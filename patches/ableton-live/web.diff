@@ -485,7 +485,7 @@ index 0000000..edb1009
 +        if let Some(new) = self.app.take_new_request() {
 +            let made = match new {
 +                NewProject::Blank { returns } => Ok((Session::new(suhina_session::blank_project_with(returns)), Vec::new())),
-+                NewProject::Template(path) => Session::from_template(&path),
++                NewProject::Template(path) => Session::from_template(&path, None),
 +            };
 +            match made {
 +                Ok((session, warnings)) => self.show_session(session, warnings, OpenAs::NewTab),
