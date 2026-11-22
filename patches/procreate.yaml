@@ -126,6 +126,7 @@
 - {file: crates/core/src/clipboard.rs, find: *end, after: *std}
 - {file: crates/core/src/frame_loop.rs, find: *end, after: *std}
 - {file: crates/core/src/guide.rs, find: *end, after: *std}
+- {file: crates/core/src/pacing.rs, find: *end, after: *std}
 - {file: crates/core/src/held.rs, find: *end, after: *std}
 - {file: crates/core/src/plugin_artwork.rs, find: *end, after: *std}
 # The frame loop (which never starts here) waits on a Condvar until an `Instant` of the shimmed clock; parking_lot's `wait_until`
@@ -136,6 +137,9 @@
 - file: crates/core/src/frame_loop.rs
   find: '_ = shared\.wake\.wait_until\(&mut st, at\)'
   replace: '_ = shared.wake.wait_for(&mut st, at.saturating_duration_since(Instant::now()))'
+- file: crates/core/src/frame_loop.rs
+  find: '_ = shared\.wake\.wait_until\(&mut st, again\)'
+  replace: '_ = shared.wake.wait_for(&mut st, again.saturating_duration_since(Instant::now()))'
 # Likewise the time-lapse's `settle` waits on a Condvar until an `Instant`: it waits for the time left.
 - file: crates/core/src/timelapse.rs
   find: 'self\.inner\.kept\.wait_until\(&mut queue, until\)'
