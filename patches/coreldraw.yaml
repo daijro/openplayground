@@ -38,7 +38,7 @@
   find: '\bpub\s+fn\s+write\s*\(\s*path\s*:\s*impl\s+AsRef<Path>\s*,\s*bytes\s*:\s*impl\s+AsRef<\[u8\]>\s*\)\s*->\s*std::io::Result<\(\)>\s*\{\s*let\s+path\s*=\s*path\.as_ref\(\);'
   after: "\n    // A file in Playground's Files goes back there (patches/coreldraw.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    if crate::playground::write(path, bytes.as_ref()) {\n        return Ok(());\n    }"
 - file: apps/tracedraw/src/files.rs
-  find: '\bpub\s+fn\s+run_finished\s*\(\s*app\s*:\s*&mut\s+App\s*\)\s*\{'
+  find: '\bpub\s+fn\s+run_finished\s*\(\s*app\s*:\s*&mut\s+App\s*(?:,[^)]*)?\)\s*\{'
   after: "\n    // Playground's dialogs and Files' \"Open in TraceDraw\" (patches/coreldraw.yaml).\n    #[cfg(target_arch = \"wasm32\")]\n    crate::playground::frame(app);"
 
 # Rule 6/8: Save. In upstream's browser build every Save asks Save As (a download has no file to write back to); a
