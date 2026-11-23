@@ -811,7 +811,7 @@ index 0000000..4369263
 +fn size_of(block: &Block) -> (f32, bool) {
 +    match block {
 +        Block::Heading { level, .. } => ([28.0, 22.0, 18.0].get(usize::from(*level).saturating_sub(1)).copied().unwrap_or(16.0), true),
-+        Block::Code { .. } | Block::MathBlock(_) => (13.5, false),
++        Block::Code { .. } | Block::MathBlock(..) => (13.5, false),
 +        _ => (14.5, false),
 +    }
 +}
@@ -820,14 +820,14 @@ index 0000000..4369263
 +fn lead(block: &Block, editing: bool) -> f32 {
 +    match block {
 +        Block::Item { depth, .. } => 8.0 + *depth as f32 * 18.0 + 22.0,
-+        Block::Quote(_) => {
++        Block::Quote(..) => {
 +            if editing {
 +                18.0
 +            } else {
 +                12.0
 +            }
 +        }
-+        Block::Code { .. } | Block::MathBlock(_) => {
++        Block::Code { .. } | Block::MathBlock(..) => {
 +            if editing {
 +                0.0
 +            } else {
