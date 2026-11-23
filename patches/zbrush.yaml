@@ -196,6 +196,7 @@
 - {file: crates/oxy-app/src/document.rs, find: *end, after: *std}
 - {file: crates/oxy-app/src/living.rs, find: *end, after: *std}
 - {file: crates/oxy-app/src/tube.rs, find: *end, after: *std}
+- {file: crates/oxy-app/src/select_shapes.rs, find: *end, after: *std}
 # The `--link` inbox is never used on a page (its files are the real file system's), but app.rs hands it the page's clock: only its
 # `Instant` comes from the playground module, and its file calls stay on the real std.
 - file: crates/oxy-app/src/bridge/inbox.rs
