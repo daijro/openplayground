@@ -9,5 +9,5 @@ new file mode 100644
 +
 +pub(crate) fn map(frame: &lcc_pipeline::geometry::Frame, crop: lcc_geom::CropGeometry, area: egui::Rect, layout: Option<CropLayout>) -> CanvasMap {
 +    // fitted and centred: the same for everyone whatever their zoom
-+    crate::panels::detail::crop_view(frame, crop, area, layout, Zoom::Fit, 1.0, (0.5, 0.5)).map
++    crate::panels::detail::crop_view(frame, crop, false, area, layout, Zoom::Fit, 1.0, (0.5, 0.5)).map
 +}
