@@ -84,7 +84,7 @@
 # start screen lists the session's documents closed here, to open again (after its community card).
 - live: true
   file: crates/ui-egui/src/**/*.rs
-  find: '^[ \t]*x\s*\+=\s*w;(?=\s*\}\s*if let Some\(i\) = close\b)'
+  find: '^[ \t]*edges\.push\(\(r\.min\.x,\s*r\.max\.x\)\);'
   before: "        #[cfg(target_arch = \"wasm32\")] crate::canvas::live::tab(app, ui, i, r);\n"
 - live: true
   file: crates/ui-egui/src/**/*.rs

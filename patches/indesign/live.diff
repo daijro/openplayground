@@ -586,7 +586,7 @@ index 0000000..921ef26
 +use crate::DesignApp;
 +use designcraft_engine::DocState;
 +use designcraft_engine::cmd::{base64_decode, base64_encode};
-+use designcraft_engine::doc::{Document, Selection};
++use designcraft_engine::doc::{AssetData, Document, Selection};
 +use playground_live::{Live, Presence, presence};
 +use serde_json::{Value, json};
 +use std::cell::{Cell, RefCell};
@@ -694,7 +694,7 @@ index 0000000..921ef26
 +    if let Some(assets) = v.get_mut("assets").and_then(Value::as_object_mut) {
 +        for (id, asset) in &doc.assets {
 +            if let Some(a) = assets.get_mut(&id.0.to_string()).and_then(Value::as_object_mut) {
-+                a.insert("data".into(), base64(&asset.data).into());
++                a.insert("data".into(), base64(&asset.data.load().unwrap_or_default()).into());
 +            }
 +        }
 +    }
@@ -770,12 +770,12 @@ index 0000000..921ef26
 +        // The file this person has, unless its base64 differs: decoded only then.
 +        let known = |o: &Arc<Vec<u8>>| BASE64.with_borrow(|cache| cache.iter().any(|(d, s)| Arc::ptr_eq(d, o) && s == text));
 +        Arc::make_mut(asset).data = match o {
-+            Some(o) if known(&o.data) => o.data.clone(),
++            Some(o) if o.data.embedded_bytes().is_some_and(|b| known(b)) => o.data.clone(),
 +            _ => {
 +                let data = base64_decode(text);
 +                match o {
-+                    Some(o) if *o.data == data => o.data.clone(),
-+                    _ => Arc::new(data),
++                    Some(o) if o.data.embedded_bytes().is_some_and(|b| **b == data) => o.data.clone(),
++                    _ => AssetData::embedded(data),
 +                }
 +            }
 +        };
