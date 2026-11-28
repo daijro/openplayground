@@ -370,7 +370,7 @@ index 0000000..8ed51e6
 +fn document(shared: &Value) -> Result<Document, Error> {
 +    let invalid = |e: String| format!("Invalid shared document: {e}");
 +    let changes = Vec::<Change>::deserialize(shared).map_err(|e| invalid(e.to_string()))?;
-+    Ok(Replica::from_snapshot(&changes).map_err(|e| invalid(e.to_string()))?.document().clone())
++    Ok(Replica::from_snapshot(changes.as_slice().into()).map_err(|e| invalid(e.to_string()))?.document().clone())
 +}
 +
 +/// The session's files in a shared value: (id, file); `null` is none.
