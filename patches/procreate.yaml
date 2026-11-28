@@ -86,7 +86,7 @@
   find: '(    pub fn instance_for_display\([^)]*\) -> Option<wgpu::Instance> \{\n)'
   replace: "$1        #[cfg(target_arch = \"wasm32\")]\n        {\n            let _ = display;\n            return (tries == 0).then(web::instance);\n        }\n"
 - file: crates/gpu/src/lib.rs
-  find: '(        let adapter = pollster::block_on\(instance\.request_adapter\([\s\S]*?\.map_err\(\|e\| GpuError::NoAdapter\(e\.to_string\(\)\)\)\?;\n)'
+  find: '(        let adapter = (?:match picked \{|pollster::block_on\(instance\.request_adapter\())'
   replace: "        #[cfg(target_arch = \"wasm32\")]\n        let adapter = web::adapter()?;\n        #[cfg(not(target_arch = \"wasm32\"))]\n$1"
 - file: crates/gpu/src/lib.rs
   find: '(        let \(device, queue\) = pollster::block_on\(adapter\.request_device\([\s\S]*?\.map_err\(\|e\| GpuError::Device\(e\.to_string\(\)\)\)\?;\n)'
@@ -114,6 +114,9 @@
 - {file: crates/gpu/src/canvas/plugin_filter.rs, find: *end, after: &std "\n// Playground's browser build: the clock, files and threads (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::std;\n"}
 - {file: crates/core/src/animation.rs, find: *end, after: *std}
 - {file: crates/core/src/device.rs, find: *end, after: *std}
+- file: crates/core/src/device/lost.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::std;\n"
 - {file: crates/core/src/hooks.rs, find: *end, after: *std}
 - {file: crates/core/src/lib.rs, find: *end, after: *std}
 - {file: crates/core/src/plugin_file.rs, find: *end, after: *std}
@@ -204,6 +207,12 @@
 - {file: desktop/src/ui.rs, find: *end, after: *std}
 - {file: desktop/src/video.rs, find: *end, after: *std}
 - {file: desktop/src/zoom.rs, find: *end, after: *std}
+- file: desktop/src/frame_parts.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::std;\n"
+- file: desktop/src/window_watch.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: the clock, files and threads (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::std;\n"
 - {file: crates/gpu/src/lib.rs, find: *end, after: &stdp "\n// Playground's browser build: the clock, files and threads, and no waiting on the GPU (patches/procreate.yaml).\n#[cfg(target_arch = \"wasm32\")]\nuse procraft_engine::playground::{pollster, std};\n"}
 - {file: crates/gpu/src/canvas.rs, find: *end, after: *stdp}
 - {file: crates/core/src/frame.rs, find: *end, after: *stdp}
