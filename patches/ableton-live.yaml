@@ -39,6 +39,19 @@
   find: '(?![\s\S])'
   after: "\n// Playground's browser build: no plug-in hosts there (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::interprocess;\n"
 
+# Rules 3d-3f: the surface programs' supervisor (crates/session/src/extensions/programs.rs) uses `interprocess` too: the
+# same never-connecting stand-in on wasm (no Lua runner process starts in a browser). Same shape as the rules above; if
+# upstream drops the dependency or the module, drop these.
+- file: crates/session/Cargo.toml
+  find: '^interprocess\s*=[^\n]*\n'
+  replace: ''
+- file: crates/session/Cargo.toml
+  find: '(?![\s\S])'
+  after: "\n[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\ninterprocess = \"2.4\"\n"
+- file: crates/session/src/extensions/programs.rs
+  find: '(?![\s\S])'
+  after: "\n// Playground's browser build: no program runners there (patches/ableton-live.yaml).\n#[cfg(target_arch = \"wasm32\")] use suhina_playground::interprocess;\n"
+
 # Rules 3a-3c: real-time thread priority has no browser side (`thread-priority` doesn't build for wasm32: no libc): its
 # crate line moves into a native-only table, and on wasm the priority stays normal (the browser's audio thread is not
 # ours to raise). If upstream drops the dependency or gates it itself, drop these rules.
