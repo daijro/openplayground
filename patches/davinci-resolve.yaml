@@ -79,6 +79,12 @@
   find: '\[target\.''cfg\(target_arch = "wasm32"\)''\.dependencies\]'
   after: "\nserde.workspace = true\nserde_json.workspace = true"
 
+# actions.rs and app.rs use effect_bundle (bundles, LUT library) on every target. The module only needs data_dir (None
+# on wasm), picasso-drp (linked above) and picasso-color/core, so drop its gate. Drop the rule once upstream ungates it.
+- file: crates/picasso-ui/src/lib.rs
+  find: '#\[cfg\(not\(target_arch = "wasm32"\)\)\]\s*(mod effect_bundle;)'
+  replace: '$1'
+
 # app.rs imports picasso_decode::FrameProvider on every target, but picasso-decode is linked off the web only (its
 # one use, frame_at, sits in desktop-gated code). Gate the import. Drop the rule once upstream gates it.
 - file: crates/picasso-ui/src/app.rs
