@@ -130,6 +130,7 @@
 - {file: crates/core/src/frame_loop.rs, find: *end, after: *std}
 - {file: crates/core/src/log_notes.rs, find: *end, after: *std}
 - {file: crates/core/src/guide.rs, find: *end, after: *std}
+- {file: crates/core/src/log_notes.rs, find: *end, after: *std}
 - {file: crates/core/src/pacing.rs, find: *end, after: *std}
 - {file: crates/core/src/held.rs, find: *end, after: *std}
 - {file: crates/core/src/plugin_artwork.rs, find: *end, after: *std}
